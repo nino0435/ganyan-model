@@ -1,0 +1,6 @@
+venv/
+hist/
+*.pkl
+download.out
+__pycache__/
+.DS_Store

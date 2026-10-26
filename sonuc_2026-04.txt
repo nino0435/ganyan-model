@@ -1,0 +1,34 @@
+Eğitim: 2025-01-01..2026-03-31  7633 koşu / 73990 at
+Test:   2026-04-01..2026-10-25  3664 koşu / 37192 at
+
+Yöntem                        1.tercih kazandı   ilk2   ilk3   ilk4  log-loss  ganyan ROI
+AGF favorisi                            33.4%  53.9%  66.8%  77.1%    1.8409     -28.8%
+Ganyan favorisi (son oran)              34.4%  53.6%  67.0%  77.0%    1.8652     -29.3%
+Model (AGF'siz)                         27.2%  46.5%  61.2%  71.8%    1.9668     -29.3%
+Model + AGF                             34.0%  54.0%  67.7%  77.6%    1.8347     -25.9%
+Fark (Model (AGF'siz) − AGF favorisi): -6.1%  (%95 GA -7.5% … -4.6%)
+Fark (Model + AGF − AGF favorisi): +0.6%  (%95 GA -0.2% … +1.4%)
+Fark (Ganyan favorisi (son oran) − AGF favorisi): +1.1%  (%95 GA +0.1% … +2.0%)
+
+Irka göre 1. tercih isabeti:
+  Arap      1635 koşu  AGF favorisi 30.9%  Ganyan favorisi (son oran) 31.4%  Model (AGF'siz) 24.2%  Model + AGF 32.1%
+  Ingiliz   2029 koşu  AGF favorisi 35.3%  Ganyan favorisi (son oran) 36.9%  Model (AGF'siz) 29.7%  Model + AGF 35.5%
+
+Değer bahsi (p × son oran ≥ eşik; son oranlar bahis anında bilinmez → iyimser):
+  Model (AGF'siz)  eşik 1.2:  7436 bahis, isabet  4.9%, ROI -29.2%
+  Model (AGF'siz)  eşik 1.5:  3924 bahis, isabet  4.4%, ROI -23.5%
+  Model (AGF'siz)  eşik 2.0:  1490 bahis, isabet  3.9%, ROI -20.6%
+  Model + AGF      eşik 1.2:  1168 bahis, isabet  7.6%, ROI +15.1%
+  Model + AGF      eşik 1.5:   285 bahis, isabet  7.7%, ROI +60.1%
+  Model + AGF      eşik 2.0:    30 bahis, isabet  6.7%, ROI +36.5%
+
+Altılı simülasyonu (test dönemi, 761 altılı; her ayakta ilk k at; ikramiye birim başına, birim 1.25 TL varsayımı):
+  k=2 AGF sırası      : 743 altılı, 6/6 tutan 11 (1.5%), ort. ayak 3.21, maliyet 59,440 TL, dönüş 14,815 TL, ROI -75%
+  k=2 Model + AGF     : 743 altılı, 6/6 tutan 11 (1.5%), ort. ayak 3.23, maliyet 59,440 TL, dönüş 16,131 TL, ROI -73%
+  k=2 Model (AGF'siz) : 743 altılı, 6/6 tutan 6 (0.8%), ort. ayak 2.76, maliyet 59,440 TL, dönüş 9,743 TL, ROI -84%
+  k=3 AGF sırası      : 743 altılı, 6/6 tutan 53 (7.1%), ort. ayak 3.99, maliyet 677,059 TL, dönüş 243,387 TL, ROI -64%
+  k=3 Model + AGF     : 743 altılı, 6/6 tutan 66 (8.9%), ort. ayak 4.04, maliyet 677,059 TL, dönüş 371,768 TL, ROI -45%
+  k=3 Model (AGF'siz) : 743 altılı, 6/6 tutan 35 (4.7%), ort. ayak 3.65, maliyet 677,059 TL, dönüş 292,115 TL, ROI -57%
+  k=4 AGF sırası      : 743 altılı, 6/6 tutan 153 (20.6%), ort. ayak 4.59, maliyet 3,804,160 TL, dönüş 1,808,971 TL, ROI -52%
+  k=4 Model + AGF     : 743 altılı, 6/6 tutan 162 (21.8%), ort. ayak 4.63, maliyet 3,804,160 TL, dönüş 2,598,920 TL, ROI -32%
+  k=4 Model (AGF'siz) : 743 altılı, 6/6 tutan 101 (13.6%), ort. ayak 4.30, maliyet 3,804,160 TL, dönüş 1,409,539 TL, ROI -63%
