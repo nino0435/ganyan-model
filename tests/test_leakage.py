@@ -97,3 +97,17 @@ def test_no_future_or_sameday_leakage():
             atol=1e-12,
             obj=f"Feature column '{col}' leaked future or same-day outcome information!",
         )
+
+
+def test_walk_forward_non_overlapping():
+    from ganyan.backtest import walk_forward
+
+    raw = _make_synthetic_history()
+    preds, monthly, bs = walk_forward(raw, months=["2026-06", "2026-07"], ref_end="2025-07-01")
+    assert not preds.empty
+    assert list(monthly["month"]) == ["2026-06", "2026-07"]
+    assert "v1_agf" in bs
+    # Probabilities in each race sum to 1
+    sums = preds.groupby("race_id")["p_v1_agf"].sum()
+    assert np.allclose(sums.values, 1.0)
+

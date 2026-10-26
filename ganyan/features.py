@@ -156,7 +156,7 @@ def build_features(runners_df, ref_end="2025-07-01"):
         prior = (day - day_now).rename(columns={"size": f"{p}_n", "sum": f"{p}_w"})
         df = df.join(prior, on=[who, "date"])
         df[f"{p}_wr"] = (df[f"{p}_w"] + 1.0) / (df[f"{p}_n"] + 10.0)
-    df.drop(columns=["_win_z"], inplace=True)
+    df = df.drop(columns=["_win_z"])
 
     # --- Program-derived features (known before race)
     for prog_col in ["son6", "kgs", "s20", "best_time_s"]:
