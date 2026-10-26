@@ -57,3 +57,44 @@ def test_upsert_program_db(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM races").fetchone()[0] == 8
     assert conn.execute("SELECT COUNT(*) FROM runners").fetchone()[0] == len(res["runners"])
     conn.close()
+
+
+def test_update_daily_idempotent(tmp_path):
+    import shutil
+    from scripts.update_daily import update_daily
+
+    db_path = tmp_path / "daily.db"
+    res_dir = tmp_path / "results"
+    prog_dir = tmp_path / "program"
+    res_dir.mkdir()
+    prog_dir.mkdir()
+
+    res_fix = os.path.join(os.path.dirname(__file__), "fixtures", "results_2026-10-24_Ankara.csv")
+    shutil.copy(res_fix, res_dir / "2026-10-24_Ankara.csv")
+    shutil.copy(FIXTURE, prog_dir / "2026-10-25_Adana.csv")
+
+    # Populate via upsert through update_daily helper logic (offline)
+    conn = init_db(db_path)
+    from ganyan.db import upsert_results
+    from ganyan.parse_results import parse_results_file
+
+    upsert_results(conn, parse_results_file(res_dir / "2026-10-24_Ankara.csv", date="2026-10-24", city="Ankara"))
+    upsert_program(conn, parse_program_file(prog_dir / "2026-10-25_Adana.csv", date="2026-10-25", city="Adana"))
+    snap1 = (
+        conn.execute("SELECT * FROM races ORDER BY race_id").fetchall(),
+        conn.execute("SELECT * FROM runners ORDER BY race_id, horse_key").fetchall(),
+        conn.execute("SELECT * FROM bets ORDER BY race_id, bet, combo").fetchall(),
+        conn.execute("SELECT * FROM altili ORDER BY date, city, which").fetchall(),
+    )
+    # Run second time
+    upsert_results(conn, parse_results_file(res_dir / "2026-10-24_Ankara.csv", date="2026-10-24", city="Ankara"))
+    upsert_program(conn, parse_program_file(prog_dir / "2026-10-25_Adana.csv", date="2026-10-25", city="Adana"))
+    snap2 = (
+        conn.execute("SELECT * FROM races ORDER BY race_id").fetchall(),
+        conn.execute("SELECT * FROM runners ORDER BY race_id, horse_key").fetchall(),
+        conn.execute("SELECT * FROM bets ORDER BY race_id, bet, combo").fetchall(),
+        conn.execute("SELECT * FROM altili ORDER BY date, city, which").fetchall(),
+    )
+    assert snap1 == snap2
+    conn.close()
+
