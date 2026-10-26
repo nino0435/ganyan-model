@@ -98,3 +98,27 @@ def test_update_daily_idempotent(tmp_path):
     assert snap1 == snap2
     conn.close()
 
+
+def test_parse_live_program_html():
+    from scripts.snapshot_agf import parse_live_program_html
+
+    sample_html = """
+    <div>1. Koşu : 14.30</div>
+    <table>
+      <tr>
+        <td class="gunluk-GunlukYarisProgrami-SiraId">1</td>
+        <td class="gunluk-GunlukYarisProgrami-AtAdi">ARES GOLD (8)</td>
+        <td class="gunluk-GunlukYarisProgrami-AGFORAN">%15(3)</td>
+        <td class="gunluk-GunlukYarisProgrami-Gny">31,90</td>
+      </tr>
+    </table>
+    """
+    snaps = parse_live_program_html(sample_html, "2026-10-27", "Adana")
+    assert len(snaps) == 1
+    assert snaps[0]["race_id"] == "2026-10-27_Adana_1"
+    assert snaps[0]["prog_no"] == 1
+    assert snaps[0]["agf_pct"] == 15.0
+    assert snaps[0]["agf_rank"] == 3
+    assert snaps[0]["ganyan_live"] == pytest.approx(31.90)
+
+
