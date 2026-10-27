@@ -41,5 +41,5 @@ venv/bin/python -m pytest -q
 - Kur/yenile: `bash ops/install_launchd.sh` · kaldır: `bash ops/uninstall_launchd.sh` · log: `~/Library/Logs/ganyan-daily.log`.
 - Sabah saatleri her gün için son 90 günün en erken koşusundan 45 dk öncedir (`ops/launchd/com.ganyan.sabah.plist`).
 - `com.ganyan.uyanik` 10:41-14:15 arası `caffeinate` ile uykuyu engeller; uyandırma için bir kez: `sudo pmset repeat wakeorpoweron MTWRFSU 10:40:00` (iptal: `sudo pmset repeat cancel`).
-- Proje `~/Desktop` altında ÇALIŞMAZ (TCC + iCloud); `~/Projects/ganyan_model`'de tutulur. Mac uykudaysa iş uyanınca bir kez çalışır, kapalıysa o gün kaçar.
-- venv bozulursa (ör. `brew upgrade python`): `python3 -m venv ~/ganyan_venv && ~/ganyan_venv/bin/pip install numpy pandas scikit-learn pytest`.
+- Proje `~/AndroidStudioProjects/ganyan`'de tutulur (`~/Desktop` altında ÇALIŞMAZ: TCC + iCloud). `data/` ve `venv/` bu klasörün içinde, gitignore'da. Mac uykudaysa iş uyanınca bir kez çalışır, kapalıysa o gün kaçar.
+- venv bozulursa (ör. `brew upgrade python`): `rm -rf venv && python3 -m venv venv && venv/bin/pip install numpy pandas scikit-learn pytest`.

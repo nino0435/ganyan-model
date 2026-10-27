@@ -1,7 +1,7 @@
 # GANYAN — Mobil uygulamadan önceki yol haritası (uygulama şartnamesi)
 
 > **Kime:** Bu planı kodlayacak ajan (Gemini / Antigravity).
-> **Hazırlayan:** Claude, 26.10.2026. **Repo:** `~/Desktop/ganyan_model` → `github.com/nino0435/ganyan-model` (private, `main`).
+> **Hazırlayan:** Claude, 26.10.2026. **Repo:** `~/AndroidStudioProjects/ganyan` → `github.com/nino0435/ganyan-model` (private, `main`).
 > Kararlar verildi (§1); tartışma yok, tahmin yürütme yok. Belirsiz olan her şey §10 "Doğrula"da; orada yazanı
 > **ölçerek** çöz, uydurma. Bu proje **derspilot ile ilgisiz**: derspilot reposuna dokunma.
 

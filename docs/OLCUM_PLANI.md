@@ -28,7 +28,7 @@ başarı ölçütü değildir (gerekçe §6/T9).
 ## 1. Klasör ve mevcut durum
 
 ```
-~/Desktop/ganyan_model/
+~/AndroidStudioProjects/ganyan/
   tools/download_hist.py   # TJK gün sayfası → yerli hipodromlar → sonuç CSV'leri (kaldığı yerden devam eder)
   tools/parse_hist.py      # CSV'ler → her satırı bir at-koşu kaydı olan tablo (pickle)
   tools/model.py           # sızıntısız özellikler + 2 model + kıyas + altılı simülasyonu
@@ -45,7 +45,7 @@ başarı ölçütü değildir (gerekçe §6/T9).
 ## 2. Ortam kurulumu (bir kez)
 
 ```bash
-cd ~/Desktop/ganyan_model
+cd ~/AndroidStudioProjects/ganyan
 python3 -m venv venv
 venv/bin/pip install -q numpy pandas scikit-learn
 venv/bin/python -c "import numpy, pandas, sklearn; print(numpy.__version__, pandas.__version__, sklearn.__version__)"
@@ -58,7 +58,7 @@ Bu makinede çalışan sürümler: Python 3.14.6, numpy 2.5.4, pandas 3.1.0, sci
 ## 3. Adım 1 — İndirmeyi tamamla (~30–40 dk, arka planda)
 
 ```bash
-cd ~/Desktop/ganyan_model
+cd ~/AndroidStudioProjects/ganyan
 nohup python3 -I tools/download_hist.py hist 2024-10-26 2026-10-25 > download.out 2>&1 &
 ```
 
@@ -136,7 +136,7 @@ venv/bin/python -I tools/model.py runs.pkl hist 2026-07-01 | tee sonuc_2026-07.t
 
 ---
 
-## 7. Rapor — `~/Desktop/ganyan_model/SONUC.md` dosyasına Türkçe yaz
+## 7. Rapor — `~/AndroidStudioProjects/ganyan/SONUC.md` dosyasına Türkçe yaz
 
 Aşağıdaki şablonu doldur (sayıları çıktılardan kopyala, yorum katma):
 
@@ -186,4 +186,4 @@ Uyarılar: <başarısız indirmeler, tutarsızlık, beklenmedik durumlar>
 
 "İndirme tamamlandı (<N> dosya, <başarısız> başarısız). <test dönemi>'nde model AGF favorisini
 [yendi/yenemedi]: 1. tercih isabeti model <x>, AGF <y> (fark %95 GA <a>…<b>); log-loss model <..>, AGF <..>.
-Ayrıntı: ~/Desktop/ganyan_model/SONUC.md."
+Ayrıntı: ~/AndroidStudioProjects/ganyan/SONUC.md."
