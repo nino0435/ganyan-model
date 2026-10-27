@@ -85,6 +85,17 @@ CREATE TABLE IF NOT EXISTS predictions (
     agf_used REAL,
     PRIMARY KEY(race_id, prog_no, model_version)
 );
+
+CREATE TABLE IF NOT EXISTS weather_hourly (
+    city TEXT,
+    ts TEXT,
+    precip_mm REAL,
+    temp_c REAL,
+    rh REAL,
+    wind_kmh REAL,
+    src TEXT,
+    PRIMARY KEY(city, ts)
+);
 """
 
 
@@ -93,8 +104,12 @@ def init_db(path):
     parent = os.path.dirname(str(path))
     if parent:
         os.makedirs(parent, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), timeout=30)
     conn.executescript(SCHEMA_SQL)
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(races)").fetchall()}
+    for col in ("track_cond_raw", "track_cond"):
+        if col not in existing_cols:
+            conn.execute(f"ALTER TABLE races ADD COLUMN {col} TEXT")
     conn.commit()
     return conn
 
@@ -103,10 +118,17 @@ def upsert_results(conn, parsed):
     """Upsert parsed results dict (races, runners, bets, altili) into SQLite."""
     cur = conn.cursor()
     for r in parsed.get("races", []):
+        r_row = {"track_cond_raw": None, "track_cond": None, **r}
         cur.execute(
             """
-            INSERT INTO races (race_id, date, city, race_no, post_time, yg_no, cls, breed, distance, surface, status)
-            VALUES (:race_id, :date, :city, :race_no, :post_time, :yg_no, :cls, :breed, :distance, :surface, :status)
+            INSERT INTO races (
+                race_id, date, city, race_no, post_time, yg_no, cls, breed,
+                distance, surface, status, track_cond_raw, track_cond
+            )
+            VALUES (
+                :race_id, :date, :city, :race_no, :post_time, :yg_no, :cls, :breed,
+                :distance, :surface, :status, :track_cond_raw, :track_cond
+            )
             ON CONFLICT(race_id) DO UPDATE SET
                 date = excluded.date,
                 city = excluded.city,
@@ -117,9 +139,11 @@ def upsert_results(conn, parsed):
                 breed = COALESCE(excluded.breed, races.breed),
                 distance = COALESCE(excluded.distance, races.distance),
                 surface = COALESCE(excluded.surface, races.surface),
-                status = excluded.status
+                status = excluded.status,
+                track_cond_raw = COALESCE(excluded.track_cond_raw, races.track_cond_raw),
+                track_cond = COALESCE(excluded.track_cond, races.track_cond)
             """,
-            r,
+            r_row,
         )
 
     for run in parsed.get("runners", []):
@@ -191,10 +215,17 @@ def upsert_program(conn, parsed):
     """Upsert parsed program dict (races, runners) into SQLite."""
     cur = conn.cursor()
     for r in parsed.get("races", []):
+        r_row = {"track_cond_raw": None, "track_cond": None, **r}
         cur.execute(
             """
-            INSERT INTO races (race_id, date, city, race_no, post_time, yg_no, cls, breed, distance, surface, status)
-            VALUES (:race_id, :date, :city, :race_no, :post_time, :yg_no, :cls, :breed, :distance, :surface, :status)
+            INSERT INTO races (
+                race_id, date, city, race_no, post_time, yg_no, cls, breed,
+                distance, surface, status, track_cond_raw, track_cond
+            )
+            VALUES (
+                :race_id, :date, :city, :race_no, :post_time, :yg_no, :cls, :breed,
+                :distance, :surface, :status, :track_cond_raw, :track_cond
+            )
             ON CONFLICT(race_id) DO UPDATE SET
                 post_time = COALESCE(excluded.post_time, races.post_time),
                 yg_no = COALESCE(excluded.yg_no, races.yg_no),
@@ -202,9 +233,11 @@ def upsert_program(conn, parsed):
                 breed = COALESCE(excluded.breed, races.breed),
                 distance = COALESCE(excluded.distance, races.distance),
                 surface = COALESCE(excluded.surface, races.surface),
-                status = CASE WHEN races.status IN ('result', 'cancelled') THEN races.status ELSE excluded.status END
+                status = CASE WHEN races.status IN ('result', 'cancelled') THEN races.status ELSE excluded.status END,
+                track_cond_raw = COALESCE(excluded.track_cond_raw, races.track_cond_raw),
+                track_cond = COALESCE(excluded.track_cond, races.track_cond)
             """,
-            r,
+            r_row,
         )
 
     for run in parsed.get("runners", []):
