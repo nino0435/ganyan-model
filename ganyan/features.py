@@ -35,6 +35,11 @@ def _extract_son6_stats(son6_series, surface_series):
     return last_vals, mean_vals, same_vals
 
 
+WET_TRACK_CONDS = frozenset({"nemli", "islak", "agir", "yumusak"})
+TRACK_COND_CATS = ["normal", "yumusak", "nemli", "islak", "agir", "kuru"]
+SURFACES_FOR_COND = ["Çim", "Kum", "Sentetik"]
+
+
 def get_feature_cols(df=None):
     """Return (BASE, WITH_AGF) feature column lists."""
     base = [
@@ -82,8 +87,107 @@ def get_feature_cols(df=None):
     return base, with_agf
 
 
-def build_features(runners_df, ref_end="2025-07-01"):
-    """Build leak-free features from runners dataframe.
+def get_hava_feature_cols(include_track_cond=True):
+    """Return v2_agf_hava feature column list = v1_agf + weather/track features (§4)."""
+    _, with_agf = get_feature_cols()
+    hava_cols = [
+        "rain_24h",
+        "rain_72h",
+        "temp_post",
+        "wind_post",
+        "wet",
+        "horse_wet_delta",
+        "horse_n_wet",
+        "sire_wet_delta",
+        "wet_x_horse_wet_delta",
+        "wet_x_sire_wet_delta",
+    ]
+    if include_track_cond:
+        for s_lbl in ("cim", "kum", "sentetik"):
+            for c_lbl in TRACK_COND_CATS:
+                hava_cols.append(f"{s_lbl}_{c_lbl}")
+    return with_agf + hava_cols
+
+
+def _attach_race_weather(df, weather_df):
+    """Compute leak-free race-level weather features strictly before post_time (§4.1, §6.4)."""
+    if weather_df is None or len(weather_df) == 0:
+        df["rain_24h"] = np.nan
+        df["rain_72h"] = np.nan
+        df["temp_post"] = np.nan
+        df["wind_post"] = np.nan
+        return df
+
+    # Build distinct (race_id, city, date, post_time) table
+    races = df[["race_id", "city", "date", "post_time"]].drop_duplicates("race_id").copy()
+    w = weather_df.copy()
+    w["ts_dt"] = pd.to_datetime(w["ts"])
+    w = w.sort_values(["city", "ts_dt"]).reset_index(drop=True)
+
+    by_city = {}
+    for city, grp in w.groupby("city", sort=False):
+        # Index by exact hourly timestamp for O(1)/fast slice lookup
+        s_idx = grp.set_index("ts_dt")
+        by_city[city] = s_idx
+
+    r24_list, r72_list, temp_list, wind_list = [], [], [], []
+    for _, r in races.iterrows():
+        city = r["city"]
+        pt = r["post_time"]
+        d_str = pd.Timestamp(r["date"]).strftime("%Y-%m-%d")
+        if city not in by_city or not isinstance(pt, str) or ":" not in pt:
+            r24_list.append(np.nan)
+            r72_list.append(np.nan)
+            temp_list.append(np.nan)
+            wind_list.append(np.nan)
+            continue
+
+        hh_str, mm_str = pt.strip().split(":", 1)
+        hh = int(hh_str)
+        mm = int(mm_str)
+        race_dt = pd.Timestamp(f"{d_str} {hh:02d}:{mm:02d}:00")
+        # Last full hour strictly before post_time (post_time hour itself is NOT included per §4.1)
+        last_hour = pd.Timestamp(f"{d_str} {hh:02d}:00:00") - pd.Timedelta(hours=1)
+        start_24 = last_hour - pd.Timedelta(hours=23)
+        start_72 = last_hour - pd.Timedelta(hours=71)
+
+        c_df = by_city[city]
+        sub_72 = c_df.loc[start_72:last_hour]
+        if len(sub_72) == 0:
+            r24_list.append(np.nan)
+            r72_list.append(np.nan)
+            temp_list.append(np.nan)
+            wind_list.append(np.nan)
+            continue
+
+        sub_24 = sub_72.loc[start_24:last_hour]
+        r24_list.append(float(sub_24["precip_mm"].sum()) if len(sub_24) > 0 and sub_24["precip_mm"].notna().any() else np.nan)
+        r72_list.append(float(sub_72["precip_mm"].sum()) if sub_72["precip_mm"].notna().any() else np.nan)
+
+        if last_hour in sub_72.index:
+            last_row = sub_72.loc[last_hour]
+            if isinstance(last_row, pd.DataFrame):
+                last_row = last_row.iloc[-1]
+            temp_list.append(float(last_row["temp_c"]) if pd.notna(last_row["temp_c"]) else np.nan)
+            wind_list.append(float(last_row["wind_kmh"]) if pd.notna(last_row["wind_kmh"]) else np.nan)
+        else:
+            temp_list.append(np.nan)
+            wind_list.append(np.nan)
+
+    races["rain_24h"] = r24_list
+    races["rain_72h"] = r72_list
+    races["temp_post"] = temp_list
+    races["wind_post"] = wind_list
+
+    return df.merge(
+        races[["race_id", "rain_24h", "rain_72h", "temp_post", "wind_post"]],
+        on="race_id",
+        how="left",
+    )
+
+
+def build_features(runners_df, ref_end="2025-07-01", weather_df=None):
+    """Build leak-free features from runners dataframe (and optional weather_df).
 
     Every pre-race feature on day D depends strictly on days < D and pre-race program columns.
     Speed-figure reference medians are computed strictly on dates < ref_end.
@@ -186,5 +290,87 @@ def build_features(runners_df, ref_end="2025-07-01"):
     agf_sum = rg["agf_close"].transform("sum")
     df["agf_share"] = np.where(agf_sum > 0, df["agf_close"] / agf_sum, np.nan)
     df["log_agf"] = np.log(df["agf_share"].clip(lower=1e-4))
+
+    # Defragment before adding weather/track features
+    df = df.copy()
+
+    # --- Weather and Track Condition Features (§4.1, §4.2, §4.3)
+    if "post_time" not in df.columns:
+        df["post_time"] = None
+    df = _attach_race_weather(df, weather_df)
+
+    has_tc = "track_cond" in df.columns and df["track_cond"].notna().any()
+    if not has_tc:
+        df["track_cond"] = "bilinmiyor"
+    else:
+        df["track_cond"] = df["track_cond"].fillna("bilinmiyor")
+
+    # One-hot surface x track_cond interaction columns (§4.1)
+    surf_map_lbl = {"Çim": "cim", "Kum": "kum", "Sentetik": "sentetik"}
+    s_lbl_series = df["surface"].map(surf_map_lbl).fillna("diger")
+    cond_cols_dict = {}
+    for s_lbl in ("cim", "kum", "sentetik"):
+        for c_lbl in TRACK_COND_CATS:
+            cond_cols_dict[f"{s_lbl}_{c_lbl}"] = (
+                (s_lbl_series == s_lbl) & (df["track_cond"] == c_lbl)
+            ).astype(int)
+
+    # Wet definition (§4.2): track_cond in {nemli, islak, agir, yumusak} when known; fallback to rain_72h >= 5.0
+    tc_known = df["track_cond"] != "bilinmiyor"
+    tc_wet = df["track_cond"].isin(WET_TRACK_CONDS)
+    rain_wet = df["rain_72h"].fillna(0.0) >= 5.0
+    cond_cols_dict["wet"] = np.where(tc_known, tc_wet, rain_wet).astype(int)
+    df = pd.concat([df, pd.DataFrame(cond_cols_dict, index=df.index)], axis=1)
+
+    # Horse wet vs dry prior normalized finish (fpct) delta (§4.3)
+    # Only prior completed starts with valid fpct count; a horse runs at most once per day so cumsum()-current is strictly < D
+    valid_fpct = df["fpct"].notna()
+    is_wet_valid = (df["wet"] == 1) & valid_fpct
+    is_dry_valid = (df["wet"] == 0) & valid_fpct
+
+    df["_w_cnt"] = is_wet_valid.astype(int)
+    df["_w_sum"] = np.where(is_wet_valid, df["fpct"], 0.0)
+    df["_d_cnt"] = is_dry_valid.astype(int)
+    df["_d_sum"] = np.where(is_dry_valid, df["fpct"], 0.0)
+
+    hg = df.groupby("horse_key", sort=False)
+    h_n_wet = hg["_w_cnt"].cumsum() - df["_w_cnt"]
+    h_s_wet = hg["_w_sum"].cumsum() - df["_w_sum"]
+    h_n_dry = hg["_d_cnt"].cumsum() - df["_d_cnt"]
+    h_s_dry = hg["_d_sum"].cumsum() - df["_d_sum"]
+
+    h_mean_wet = np.where(h_n_wet > 0, h_s_wet / np.maximum(h_n_wet, 1), np.nan)
+    h_mean_dry = np.where(h_n_dry > 0, h_s_dry / np.maximum(h_n_dry, 1), np.nan)
+    h_raw_delta = np.where((h_n_wet > 0) & (h_n_dry > 0), h_mean_wet - h_mean_dry, 0.0)
+    df["horse_n_wet"] = h_n_wet.astype(float)
+    df["horse_wet_delta"] = h_raw_delta * (h_n_wet / (h_n_wet + 5.0))
+
+    # Sire wet vs dry prior normalized finish delta across all offspring strictly before current day (< D) (§4.3)
+    if "sire" not in df.columns:
+        df["sire"] = df["horse_key"].str.split("|").str[0]
+    s_day = df.groupby(["sire", "date"])[["_w_cnt", "_w_sum", "_d_cnt", "_d_sum"]].sum()
+    s_cum = s_day.groupby(level=0).cumsum()
+    s_prior = (s_cum - s_day).rename(
+        columns={
+            "_w_cnt": "_sw_cnt",
+            "_w_sum": "_sw_sum",
+            "_d_cnt": "_sd_cnt",
+            "_d_sum": "_sd_sum",
+        }
+    )
+    df = df.join(s_prior, on=["sire", "date"])
+    sw_cnt = df["_sw_cnt"].fillna(0.0)
+    sd_cnt = df["_sd_cnt"].fillna(0.0)
+    s_mean_wet = np.where(sw_cnt > 0, df["_sw_sum"] / np.maximum(sw_cnt, 1.0), np.nan)
+    s_mean_dry = np.where(sd_cnt > 0, df["_sd_sum"] / np.maximum(sd_cnt, 1.0), np.nan)
+    s_raw_delta = np.where((sw_cnt > 0) & (sd_cnt > 0), s_mean_wet - s_mean_dry, 0.0)
+    df["sire_wet_delta"] = s_raw_delta * (sw_cnt / (sw_cnt + 20.0))
+
+    df["wet_x_horse_wet_delta"] = df["wet"] * df["horse_wet_delta"]
+    df["wet_x_sire_wet_delta"] = df["wet"] * df["sire_wet_delta"]
+
+    df = df.drop(
+        columns=["_w_cnt", "_w_sum", "_d_cnt", "_d_sum", "_sw_cnt", "_sw_sum", "_sd_cnt", "_sd_sum"]
+    )
 
     return df

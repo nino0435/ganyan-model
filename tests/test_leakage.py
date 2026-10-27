@@ -111,3 +111,97 @@ def test_walk_forward_non_overlapping():
     sums = preds.groupby("race_id")["p_v1_agf"].sum()
     assert np.allclose(sums.values, 1.0)
 
+
+def _make_synthetic_weather(dates):
+    rows = []
+    for d in dates:
+        base_dt = pd.Timestamp(d) - pd.Timedelta(days=4)
+        for h in range(24 * 6):
+            ts = (base_dt + pd.Timedelta(hours=h)).strftime("%Y-%m-%dT%H:00")
+            rows.append({
+                "city": "Ankara",
+                "ts": ts,
+                "precip_mm": 0.2,
+                "temp_c": 18.0,
+                "rh": 60.0,
+                "wind_kmh": 10.0,
+                "src": "archive",
+            })
+    df = pd.DataFrame(rows).drop_duplicates(subset=["city", "ts"]).reset_index(drop=True)
+    return df
+
+
+def test_weather_future_hour_rain_does_not_leak():
+    """§4.4 Test 1: Adding 50mm rain at or after post_time hour must not change rain_24h or rain_72h."""
+    raw = _make_synthetic_history()
+    raw["post_time"] = np.where(raw["race_no"] == 1, "14:30", "23:30")
+    w1 = _make_synthetic_weather(raw["date"].unique())
+
+    feat1 = build_features(raw, ref_end="2025-07-01", weather_df=w1)
+    day1 = feat1[feat1["date"] == pd.Timestamp("2026-06-14")].sort_values(["race_id", "horse_key"]).reset_index(drop=True)
+
+    # Inject 50mm rain at 14:00, 15:00, and 23:00 on 2026-06-14 (post_time for race 1 is 14:30; last full hour before 14:30 is 13:00)
+    w2 = w1.copy()
+    w2.loc[w2["ts"].isin(["2026-06-14T14:00", "2026-06-14T15:00", "2026-06-14T23:00"]), "precip_mm"] = 50.0
+    feat2 = build_features(raw, ref_end="2025-07-01", weather_df=w2)
+    day2 = feat2[feat2["date"] == pd.Timestamp("2026-06-14")].sort_values(["race_id", "horse_key"]).reset_index(drop=True)
+
+    r1_a = day1[day1["race_no"] == 1]
+    r1_b = day2[day2["race_no"] == 1]
+    pd.testing.assert_series_equal(r1_a["rain_24h"], r1_b["rain_24h"])
+    pd.testing.assert_series_equal(r1_a["rain_72h"], r1_b["rain_72h"])
+
+    # Also verify night race (23:30) does NOT include 23:00 hour (since last full hour strictly before 23:30 is 22:00)
+    r2_a = day1[day1["race_no"] == 2]
+    r2_b = day2[day2["race_no"] == 2]
+    attr_23 = w1.copy()
+    attr_23.loc[attr_23["ts"] == "2026-06-14T23:00", "precip_mm"] = 50.0
+    feat_23 = build_features(raw, ref_end="2025-07-01", weather_df=attr_23)
+    day_23 = feat_23[(feat_23["date"] == pd.Timestamp("2026-06-14")) & (feat_23["race_no"] == 2)].sort_values(["race_id", "horse_key"]).reset_index(drop=True)
+    pd.testing.assert_series_equal(r2_a["rain_24h"].reset_index(drop=True), day_23["rain_24h"])
+
+
+def test_future_wet_race_does_not_change_horse_or_sire_wet_delta():
+    """§4.4 Test 2: A future wet race must not change horse_wet_delta or sire_wet_delta on an earlier date."""
+    raw = _make_synthetic_history()
+    raw["post_time"] = "14:00"
+    # Mark 2025-04-15 and 2026-07-05 as wet ('yumusak'), others as dry ('normal')
+    raw["track_cond"] = np.where(raw["date"].isin(["2025-04-15", "2026-07-05"]), "yumusak", "normal")
+    w = _make_synthetic_weather(raw["date"].unique())
+
+    full_feat = build_features(raw, ref_end="2025-07-01", weather_df=w)
+    target = pd.Timestamp("2026-06-14")
+    day_full = full_feat[full_feat["date"] == target].sort_values(["race_id", "horse_key"]).reset_index(drop=True)
+
+    # Remove all future races (> 2026-06-14) and mask same-day outcomes
+    trunc = raw[pd.to_datetime(raw["date"]) <= target].copy()
+    trunc.loc[pd.to_datetime(trunc["date"]) == target, ["finish", "time_s", "ganyan"]] = np.nan
+    trunc_feat = build_features(trunc, ref_end="2025-07-01", weather_df=w)
+    day_trunc = trunc_feat[trunc_feat["date"] == target].sort_values(["race_id", "horse_key"]).reset_index(drop=True)
+
+    for col in ["horse_wet_delta", "horse_n_wet", "sire_wet_delta", "wet_x_horse_wet_delta", "wet_x_sire_wet_delta"]:
+        pd.testing.assert_series_equal(day_full[col], day_trunc[col], check_exact=False, rtol=1e-12, atol=1e-12)
+
+
+def test_missing_weather_produces_nan_without_error():
+    """§4.4 Test 3: Missing city/hour weather produces NaN features gracefully and model fits without error."""
+    from ganyan.features import get_hava_feature_cols
+    from ganyan.model import fit_predict_df
+
+    raw = _make_synthetic_history()
+    raw["post_time"] = "15:00"
+    # Pass empty weather DataFrame
+    feat = build_features(raw, ref_end="2025-07-01", weather_df=pd.DataFrame())
+    assert feat["rain_24h"].isna().all()
+    assert feat["rain_72h"].isna().all()
+    assert feat["temp_post"].isna().all()
+    assert feat["wind_post"].isna().all()
+
+    cols = get_hava_feature_cols()
+    tr = feat[feat["date"] < pd.Timestamp("2026-06-14")]
+    te = feat[feat["date"] >= pd.Timestamp("2026-06-14")]
+    p = fit_predict_df(tr, te, cols)
+    assert len(p) == len(te)
+    assert np.all(np.isfinite(p))
+
+
