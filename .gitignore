@@ -1,6 +1,8 @@
 venv/
+/venv
 hist/
 data/
+/data
 *.pkl
 download.out
 __pycache__/
