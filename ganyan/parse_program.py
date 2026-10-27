@@ -15,7 +15,7 @@ SON6_RE = re.compile(r"([KÇS])(\d{1,2})")
 
 def parse_son6(s):
     """Parse Son 6 Yarış string like 'K2K1Ç9K6K1K6' into [('K', 2), ('K', 1), ...]."""
-    if not s or not s.strip():
+    if not isinstance(s, str) or not s.strip():
         return []
     return [(m.group(1), int(m.group(2))) for m in SON6_RE.finditer(s.strip())]
 
