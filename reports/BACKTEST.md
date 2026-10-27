@@ -47,31 +47,30 @@
 | 250 | (i) Sabit-k (AGF) | 1628 / 972 | 38 | 2.33% | 3.31 | — | -4.18% (-5.41%…-2.89%) | 77,760 | 44,284 | -43.1% | 0.72 |
 | 250 | (ii) AGF — Amaç A | 1628 / 972 | 106 | 6.51% | 3.92 | +4.18% (+2.95%…+5.41%) | — | 229,085 | 95,622 | -58.3% | 0.21 |
 | 250 | (iii) Model (v1_agf) — Amaç A | 1628 / 972 | 117 | 7.19% | 3.93 | +4.85% (+3.62%…+6.14%) | +0.68% (-0.37%…+1.66%) | 228,996 | 137,564 | -39.9% | 0.40 |
-| 250 | (iv) Model (v1_agf) — Amaç B | 1628 / 972 | 2 | 0.12% | 2.01 | -2.21% (-3.01%…-1.47%) | -6.39% (-7.68%…-5.22%) | 230,869 | 1,119,140 | +384.8% | 13.47 |
+| 250 | (iv) Model (v1_agf) — Amaç B | 1628 / 972 | 2 | 0.12% | 2.01 | -2.21% (-3.01%…-1.47%) | -6.39% (-7.68%…-5.22%) | 230,869 | 1,119,140 | +384.8% *(tek ikramiye kaynaklı, güvenilmez)* | 13.47 |
 | 500 | (i) Sabit-k (AGF) | 1628 / 972 | 38 | 2.33% | 3.31 | — | -7.00% (-8.42%…-5.65%) | 77,760 | 44,284 | -43.1% | 0.72 |
 | 500 | (ii) AGF — Amaç A | 1628 / 972 | 152 | 9.34% | 4.17 | +7.00% (+5.71%…+8.42%) | — | 456,754 | 191,426 | -58.1% | 0.19 |
 | 500 | (iii) Model (v1_agf) — Amaç A | 1628 / 972 | 183 | 11.24% | 4.18 | +8.91% (+7.43%…+10.44%) | +1.90% (+0.68%…+3.07%) | 455,579 | 270,033 | -40.7% | 0.29 |
-| 500 | (iv) Model (v1_agf) — Amaç B | 1628 / 972 | 3 | 0.18% | 2.28 | -2.15% (-2.95%…-1.41%) | -9.15% (-10.63%…-7.74%) | 461,205 | 1,119,140 | +142.7% | 6.68 |
+| 500 | (iv) Model (v1_agf) — Amaç B | 1628 / 972 | 3 | 0.18% | 2.28 | -2.15% (-2.95%…-1.41%) | -9.15% (-10.63%…-7.74%) | 461,205 | 1,119,140 | +142.7% *(tek ikramiye kaynaklı, güvenilmez)* | 6.68 |
 | 1000 | (i) Sabit-k (AGF) | 1628 / 972 | 152 | 9.34% | 4.12 | — | -4.91% (-6.63%…-3.13%) | 885,735 | 382,159 | -56.9% | 0.25 |
 | 1000 | (ii) AGF — Amaç A | 1628 / 972 | 232 | 14.25% | 4.39 | +4.91% (+3.13%…+6.76%) | — | 913,228 | 344,536 | -62.3% | 0.10 |
 | 1000 | (iii) Model (v1_agf) — Amaç A | 1628 / 972 | 256 | 15.72% | 4.42 | +6.39% (+4.67%…+8.17%) | +1.47% (+0.18%…+2.76%) | 911,141 | 456,245 | -49.9% | 0.17 |
-| 1000 | (iv) Model (v1_agf) — Amaç B | 1628 / 972 | 4 | 0.25% | 2.55 | -9.09% (-10.63%…-7.62%) | -14.00% (-15.72%…-12.35%) | 920,312 | 1,119,140 | +21.6% | 3.34 |
+| 1000 | (iv) Model (v1_agf) — Amaç B | 1628 / 972 | 4 | 0.25% | 2.55 | -9.09% (-10.63%…-7.62%) | -14.00% (-15.72%…-12.35%) | 920,312 | 1,119,140 | +21.6% *(tek ikramiye kaynaklı, güvenilmez)* | 3.34 |
 | 2500 | (i) Sabit-k (AGF) | 1628 / 972 | 152 | 9.34% | 4.12 | — | -12.47% (-14.50%…-10.32%) | 885,735 | 382,159 | -56.9% | 0.25 |
 | 2500 | (ii) AGF — Amaç A | 1628 / 972 | 355 | 21.81% | 4.70 | +12.47% (+10.32%…+14.56%) | — | 2,289,781 | 868,707 | -62.1% | 0.18 |
 | 2500 | (iii) Model (v1_agf) — Amaç A | 1628 / 972 | 364 | 22.36% | 4.71 | +13.02% (+11.06%…+14.99%) | +0.55% (-0.92%…+2.03%) | 2,281,154 | 1,164,033 | -49.0% | 0.21 |
-| 2500 | (iv) Model (v1_agf) — Amaç B | 1628 / 972 | 6 | 0.37% | 2.94 | -8.97% (-10.38%…-7.56%) | -21.44% (-23.46%…-19.53%) | 2,300,978 | 1,127,002 | -51.0% | 1.36 |
+| 2500 | (iv) Model (v1_agf) — Amaç B | 1628 / 972 | 6 | 0.37% | 2.94 | -8.97% (-10.38%…-7.56%) | -21.44% (-23.46%…-19.53%) | 2,300,978 | 1,127,002 | -51.0% *(tek ikramiye kaynaklı, güvenilmez)* | 1.36 |
 | 5000 | (i) Sabit-k (AGF) | 1628 / 972 | 152 | 9.34% | 4.12 | — | -19.41% (-21.62%…-17.07%) | 885,735 | 382,159 | -56.9% | 0.25 |
 | 5000 | (ii) AGF — Amaç A | 1628 / 972 | 468 | 28.75% | 4.91 | +19.41% (+17.14%…+21.56%) | — | 4,591,946 | 1,976,856 | -56.9% | 0.12 |
 | 5000 | (iii) Model (v1_agf) — Amaç A | 1628 / 972 | 484 | 29.73% | 4.94 | +20.39% (+18.24%…+22.54%) | +0.98% (-0.55%…+2.58%) | 4,590,485 | 2,375,208 | -48.3% | 0.19 |
-| 5000 | (iv) Model (v1_agf) — Amaç B | 1628 / 972 | 16 | 0.98% | 3.26 | -8.35% (-9.89%…-6.88%) | -27.76% (-30.10%…-25.37%) | 4,619,222 | 1,185,314 | -74.3% | 0.68 |
+| 5000 | (iv) Model (v1_agf) — Amaç B | 1628 / 972 | 16 | 0.98% | 3.26 | -8.35% (-9.89%…-6.88%) | -27.76% (-30.10%…-25.37%) | 4,619,222 | 1,185,314 | -74.3% *(tek ikramiye kaynaklı, güvenilmez)* | 0.68 |
 
 ## 4. Karar Kapısı — Go / No-Go (§3.6)
 
-- **Ölçüt:** 5 bütçenin en az 3'ünde `(iii) Model — Amaç A`'nın 6/6 oranı `(i) Sabit-k`'dan yüksek **ve** %95 GA alt sınırı > 0 olmalı.
-- **Geçen Bütçe Sayısı (Sabit-k'ya karşı):** `5 / 5` (`250, 500, 1000, 2500, 5000 TL` bütçelerinin tamamında %95 GA alt sınırı > 0)
-- **Ek Karşılaştırma (`(ii) AGF — Amaç A`'ya karşı):** Model Amaç A, 5 bütçenin 5'inde de AGF Amaç A'dan daha yüksek 6/6 oranına sahiptir (`+0.55%` ile `+1.90%` arası); %95 GA alt sınırı > 0 olan bütçe sayısı: `2 / 5` (`500 TL` ve `1000 TL` bütçelerinde anlamlı fark).
-- **Karar:** **GEÇTİ (GO — 'Akıllı Kupon' iddiası kullanılabilir)**
-- **Kâr (ROI) İddiası:** Şartname §3.6 gereği hiçbir koşulda kâr iddiası verilmez.
+- **Birincil Karşılaştırma — `(iii) Model — Amaç A` vs `(ii) AGF — Amaç A` (Eşit Harcama):** Model Amaç A, 5 bütçenin tamamında AGF Amaç A'dan daha yüksek 6/6 oranına sahiptir (`+0.55%` ile `+1.90%` arası); ancak %95 GA alt sınırı > 0 olan bütçe sayısı **`2 / 5`** (`500 TL` ve `1000 TL` bütçeleri). Eşik `3 / 5` olduğu için **"akıllı kupon" kapısı geçmedi**.
+- **Harcama Etkisi Notu (`(iii)` ve `(ii)`'nin `(i) Sabit-k`'ya Üstünlüğü):** `(i) Sabit-k` bütçeyi dolduramamaktadır (ör. `250 TL` bütçede `77.760 TL` vs `228.996 TL`; `5000 TL` bütçede `885.735 TL` vs `4.590.485 TL` harcamaktadır). Bu nedenle `(iii)`'ün `(i) Sabit-k`'ya karşı `5 / 5` bütçedeki yüksek farkı modelin tahmin gücünden değil, açgözlü dağıtıcının bütçeyi tam kullanmasından (**harcama etkisinden**) kaynaklanmaktadır ve aynı kazanım `(ii) AGF — Amaç A` ile de elde edilmektedir.
+- **Karar:** **GEÇEMEDİ (NO-GO — "Akıllı Kupon" iddiası kullanılmayacak; özellik "Maliyet + Olasılık Hesaplayıcı" olarak konumlandırılacak)**
+- **Kâr (ROI) İddiası:** Şartname §3.6 gereği hiçbir koşulda kâr iddiası verilmez. `(iv) Amaç B` ROI satırları tek bir büyük ikramiyeden (`1.119.140 TL`) kaynaklanmaktadır ve güvenilmezdir.
 
 ## 5. Doğrulamalar (§10 — Ölçülerek Çözülen Maddeler)
 
