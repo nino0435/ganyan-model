@@ -31,10 +31,17 @@ DEFAULT_MONTHS = [
 
 def load_runners_from_db(conn):
     """Load joined races and runners from SQLite into a DataFrame."""
-    query = """
+    race_cols = {r[1] for r in conn.execute("PRAGMA table_info(races)").fetchall()}
+    tc_select = (
+        "r.track_cond_raw, r.track_cond,"
+        if "track_cond" in race_cols
+        else "NULL AS track_cond_raw, NULL AS track_cond,"
+    )
+    query = f"""
     SELECT
         r.race_id, r.date, r.city, r.race_no, r.post_time, r.yg_no,
         r.cls, r.breed, r.distance, r.surface, r.status,
+        {tc_select}
         run.prog_no, run.horse_key, run.name, run.name_raw, run.age, run.sex,
         run.sire, run.dam, run.weight, run.jockey, run.owner, run.trainer,
         run.gate, run.hp, run.son6, run.kgs, run.s20, run.best_time_s,
@@ -44,6 +51,14 @@ def load_runners_from_db(conn):
     WHERE r.status = 'result'
     """
     return pd.read_sql_query(query, conn)
+
+
+def load_weather_from_db(conn):
+    """Load weather_hourly table from SQLite into a DataFrame."""
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if "weather_hourly" not in tables:
+        return pd.DataFrame()
+    return pd.read_sql_query("SELECT city, ts, precip_mm, temp_c, rh, wind_kmh, src FROM weather_hourly", conn)
 
 
 def walk_forward(runners_df, months=None, train_start=TRAIN_START, ref_end="2025-07-01"):
