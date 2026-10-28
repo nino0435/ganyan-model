@@ -86,6 +86,12 @@ def forward_log(date_str, db_path="data/ganyan.db", prog_dir="data/raw/program",
     train_df = feat_df[ok_train]
     today_df = feat_df[feat_df["date"] == pd.Timestamp(date_str)].copy()
 
+    # AGF henüz yayınlanmadıysa o koşuyu yazma: INSERT OR IGNORE ilk kaydı kalıcı yapar,
+    # AGF'siz (neredeyse tekdüze) tahmin ileri testi bozar. Sonraki çalıştırma yazar.
+    active = today_df[today_df["scratched"].fillna(0) == 0]
+    agf_ready = active.groupby("race_id")["agf_close"].apply(lambda s: bool(s.notna().all()))
+    today_df = today_df[today_df["race_id"].map(agf_ready).fillna(False).astype(bool)].copy()
+
     if train_df.empty or today_df.empty:
         conn.close()
         return 0

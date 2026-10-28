@@ -84,6 +84,9 @@ def test_forward_log_and_report_respects_post_time(tmp_path):
     conn = init_db(db_path)
     upsert_results(conn, parse_results_file(RES_FIX, date="2026-10-24", city="Ankara"))
     upsert_program(conn, parse_program_file(PROG_FIX, date="2026-10-27", city="Adana"))
+    # Program fixture'ında AGF yok; forward_log AGF'siz koşuyu yazmadığı için doldur.
+    conn.execute("UPDATE runners SET agf_close = 10.0 WHERE race_id LIKE '2026-10-27_%'")
+    conn.commit()
     conn.close()
 
     # Log predictions with created_at BEFORE post_time (14:30)
@@ -96,5 +99,24 @@ def test_forward_log_and_report_respects_post_time(tmp_path):
     conn = init_db(db_path)
     md = build_forward_report(conn)
     assert "Koşu Öncesi Geçerli Tahmin (`created_at < post_time`):** `8` koşu" in md
+    conn.close()
+
+
+def test_forward_log_skips_races_without_agf(tmp_path):
+    from scripts.forward_log import forward_log
+
+    db_path = tmp_path / "fwd_noagf.db"
+    conn = init_db(db_path)
+    upsert_results(conn, parse_results_file(RES_FIX, date="2026-10-24", city="Ankara"))
+    upsert_program(conn, parse_program_file(PROG_FIX, date="2026-10-27", city="Adana"))
+    conn.execute(
+        "UPDATE runners SET agf_close = NULL, agf_close_rank = NULL WHERE race_id IN (SELECT race_id FROM races WHERE date = '2026-10-27')"
+    )
+    conn.commit()
+    conn.close()
+
+    assert forward_log("2026-10-27", db_path=str(db_path), do_snapshot=False, created_at="2026-10-27T05:00:00") == 0
+    conn = init_db(db_path)
+    assert conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 0
     conn.close()
 
