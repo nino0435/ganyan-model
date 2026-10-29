@@ -18,9 +18,12 @@ def _results_incomplete(conn, fn, ds, city):
     if not os.path.exists(fn):
         return True
     n_prog = conn.execute("SELECT COUNT(*) FROM races WHERE date = ? AND city = ?", (ds, city)).fetchone()[0]
+    return _race_count(fn) < n_prog
+
+
+def _race_count(fn):
     with open(fn, encoding="utf-8-sig", errors="replace") as f:
-        n_file = f.read().count("Kosu :")
-    return n_file < n_prog
+        return f.read().count("Kosu :")
 
 
 def update_daily(date_str, db_path="data/ganyan.db", res_dir="data/raw/results", prog_dir="data/raw/program", fetch=True):
