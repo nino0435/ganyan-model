@@ -120,3 +120,16 @@ def test_forward_log_skips_races_without_agf(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 0
     conn.close()
 
+
+def test_results_incomplete_detects_partial_csv(tmp_path):
+    from scripts.update_daily import _results_incomplete
+
+    conn = init_db(tmp_path / "inc.db")
+    upsert_results(conn, parse_results_file(RES_FIX, date="2026-10-24", city="Ankara"))
+    n = conn.execute("SELECT COUNT(*) FROM races WHERE date='2026-10-24' AND city='Ankara'").fetchone()[0]
+    assert not _results_incomplete(conn, RES_FIX, "2026-10-24", "Ankara")
+    partial = tmp_path / "partial.csv"
+    partial.write_text("Ankara;(1. Yarış Günü);24/10/2026\n1. Kosu :   17.45;x\n", encoding="utf-8")
+    assert n > 1 and _results_incomplete(conn, str(partial), "2026-10-24", "Ankara")
+    assert _results_incomplete(conn, str(tmp_path / "yok.csv"), "2026-10-24", "Ankara")
+    conn.close()
