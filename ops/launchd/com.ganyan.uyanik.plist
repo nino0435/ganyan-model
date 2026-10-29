@@ -9,7 +9,7 @@
 		<string>/usr/bin/caffeinate</string>
 		<string>-i</string>
 		<string>-t</string>
-		<string>12300</string>
+		<string>24540</string>
 	</array>
 	<key>RunAtLoad</key>
 	<false/>
