@@ -1,6 +1,7 @@
 #!/bin/bash
 # Günlük ileri test işi (launchd çağırır). Kullanım: scripts/daily_job.sh sabah|aksam [YYYY-MM-DD]
 #   sabah: program + canlı AGF → tahmin kaydı (yarışlardan önce)
+#   tekrar: gün içi yeniden deneme; yalnız forward_log (AGF sonradan yayınlanan koşuları ekler, kayıtlılara dokunmaz)
 #   aksam: sonuçlar → FORWARD.md → JSON export (yarışlardan sonra; 06:00'dan önce çalışırsa dünü işler)
 set -u -o pipefail
 
@@ -16,7 +17,7 @@ exec >>"$LOG" 2>&1
 
 log() { echo "$(TZ=Europe/Istanbul date +%Y-%m-%dT%H:%M:%S%z) [$MODE] $*"; }
 
-case "$MODE" in sabah|aksam) ;; *) log "kullanım: $0 sabah|aksam [YYYY-MM-DD]"; exit 2 ;; esac
+case "$MODE" in sabah|aksam|tekrar) ;; *) log "kullanım: $0 sabah|aksam|tekrar [YYYY-MM-DD]"; exit 2 ;; esac
 
 if [ -n "${2:-}" ]; then
   D="$2"
@@ -38,7 +39,9 @@ step() {
   if "$PY" -I "$@"; then log "$name OK"; else local rc=$?; log "$name HATA($rc)"; FAIL=1; fi
 }
 
-if [ "$MODE" = sabah ]; then
+if [ "$MODE" = tekrar ]; then
+  step forward_log scripts/forward_log.py --date "$D"
+elif [ "$MODE" = sabah ]; then
   step update_daily scripts/update_daily.py --date "$D"
   step forward_log scripts/forward_log.py --date "$D"
 else
