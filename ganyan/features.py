@@ -109,6 +109,62 @@ def get_hava_feature_cols(include_track_cond=True):
     return with_agf + hava_cols
 
 
+SOY_COLS = [
+    "sire_n",
+    "sire_wr",
+    "sire_fpct",
+    "sire_surf_fpct",
+    "sire_dist_fpct",
+    "dam_n",
+    "dam_fpct",
+]
+
+
+def get_soy_feature_cols():
+    """Return v3_agf_soy feature column list = v1_agf + pedigree (sire/dam) features."""
+    _, with_agf = get_feature_cols()
+    return with_agf + SOY_COLS
+
+
+def _prior_sums(df, keys, cols):
+    """Per-row sums of `cols` over the same `keys` group on dates strictly before the row's date."""
+    day = df.groupby(keys + ["date"])[cols].sum()
+    prior = day.groupby(level=list(range(len(keys)))).cumsum() - day
+    return df[keys + ["date"]].join(prior, on=keys + ["date"])[cols]
+
+
+def _attach_pedigree(df):
+    """Leak-free sire/dam features: offspring results strictly before day D, shrunk toward the prior."""
+    if "sire" not in df.columns:
+        df["sire"] = df["horse_key"].str.split("|").str[0]
+    if "dam" not in df.columns:
+        df["dam"] = df["horse_key"].str.split("|").str[1]
+    for c in ("sire", "dam"):
+        df[c] = df[c].astype("string").str.strip().replace("", pd.NA)
+    df["_dist_b"] = pd.cut(df["distance"], [0, 1399, 1799, 99999], labels=False)
+
+    valid = df["fpct"].notna()
+    df["_v"] = valid.astype(float)
+    df["_f"] = df["fpct"].where(valid, 0.0)
+    df["_w"] = df["win"].fillna(0.0)
+
+    def shrunk(keys, k, prior):
+        sub = df.dropna(subset=keys)
+        pr = _prior_sums(sub, keys, ["_v", "_f", "_w"])
+        return pr["_v"], (pr["_f"] + prior * k) / (pr["_v"] + k), (pr["_w"] + 0.1 * 10) / (pr["_v"] + 10)
+
+    n, fp, wr = shrunk(["sire"], 20.0, 0.5)
+    df["sire_n"], df["sire_fpct"], df["sire_wr"] = n, fp, wr
+    df["sire_surf_fpct"] = shrunk(["sire", "surface"], 20.0, 0.5)[1]
+    df["sire_dist_fpct"] = shrunk(["sire", "_dist_b"], 20.0, 0.5)[1]
+    n, fp, _ = shrunk(["dam"], 10.0, 0.5)
+    df["dam_n"], df["dam_fpct"] = n, fp
+    for c in ("sire_n", "dam_n"):
+        df[c] = df[c].fillna(0.0)
+
+    return df.drop(columns=["_dist_b", "_v", "_f", "_w"])
+
+
 def _attach_race_weather(df, weather_df):
     """Compute leak-free race-level weather features strictly before post_time (§4.1, §6.4)."""
     if weather_df is None or len(weather_df) == 0:
@@ -373,4 +429,4 @@ def build_features(runners_df, ref_end="2025-07-01", weather_df=None):
         columns=["_w_cnt", "_w_sum", "_d_cnt", "_d_sum", "_sw_cnt", "_sw_sum", "_sd_cnt", "_sd_sum"]
     )
 
-    return df
+    return _attach_pedigree(df)

@@ -205,3 +205,31 @@ def test_missing_weather_produces_nan_without_error():
     assert np.all(np.isfinite(p))
 
 
+
+
+def test_pedigree_features_ignore_sameday_and_future_results():
+    from ganyan.features import SOY_COLS
+
+    raw = _make_synthetic_history()
+    target_day = pd.Timestamp("2026-06-14")
+    base = build_features(raw, ref_end="2025-07-01")
+    base = base[base["date"] == target_day].set_index(["race_id", "horse_key"])[SOY_COLS]
+
+    mod = raw.copy()
+    later = pd.to_datetime(mod["date"]) >= target_day
+    mod.loc[later, "finish"] = 5 - mod.loc[later, "finish"]  # flip results on D and after
+    mod.loc[later, "time_s"] = mod.loc[later, "time_s"] + 3.0
+    flipped = build_features(mod, ref_end="2025-07-01")
+    flipped = flipped[flipped["date"] == target_day].set_index(["race_id", "horse_key"])[SOY_COLS]
+
+    pd.testing.assert_frame_equal(base.sort_index(), flipped.sort_index())
+
+
+def test_pedigree_features_use_prior_offspring_only():
+    raw = _make_synthetic_history()
+    out = build_features(raw, ref_end="2025-07-01")
+    first = out[out["date"] == pd.Timestamp("2025-02-10")]
+    assert (first["sire_n"] == 0).all() and (first["dam_n"] == 0).all()
+    assert np.allclose(first["sire_fpct"], 0.5)
+    later = out[out["date"] == pd.Timestamp("2026-07-05")]
+    assert (later["sire_n"] > 0).all()
