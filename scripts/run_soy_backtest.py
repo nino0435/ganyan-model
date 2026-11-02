@@ -1,4 +1,4 @@
-"""Evaluate v1_agf vs v3_agf_soy (pedigree features) on monthly walk-forward -> reports/SOY.md."""
+"""Evaluate v1_agf vs a feature-set variant (--set soy|ahir) on monthly walk-forward -> reports/SOY.md or AHIR.md."""
 import argparse
 import os
 import sys
@@ -9,17 +9,23 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ganyan.backtest import DEFAULT_MONTHS, TRAIN_START, load_runners_from_db
 from ganyan.db import init_db
-from ganyan.features import SOY_COLS, build_features, get_feature_cols, get_soy_feature_cols
+from ganyan.features import (
+    SOY_COLS, STABLE_COLS, build_features, get_feature_cols, get_soy_feature_cols, get_stable_feature_cols,
+)
 from ganyan.model import fit_predict_df
 
 YOUNG_MAX_STARTS = 3
+SETS = {
+    "soy": {"cols": SOY_COLS, "full": get_soy_feature_cols, "name": "v3_agf_soy", "title": "Soy (Baba/Anne) Özellikleri", "out": "reports/SOY.md"},
+    "ahir": {"cols": STABLE_COLS, "full": get_stable_feature_cols, "name": "v4_agf_ahir", "title": "Ahır Arkadaşı (Aynı Sahip/Antrenör) Özellikleri", "out": "reports/AHIR.md"},
+}
 
 
-def run_soy_walk_forward(runners_df, months=None, train_start=TRAIN_START, ref_end="2025-07-01"):
+def run_soy_walk_forward(runners_df, set_name="soy", months=None, train_start=TRAIN_START, ref_end="2025-07-01"):
     months = months or DEFAULT_MONTHS
     df = build_features(runners_df, ref_end=ref_end)
     _, v1_cols = get_feature_cols(df)
-    v3_cols = get_soy_feature_cols()
+    v3_cols = SETS[set_name]["full"]()
 
     rg = df.groupby("race_id")
     ok = (
@@ -71,22 +77,23 @@ def paired_stats(w):
     }
 
 
-def format_report(winners):
+def format_report(winners, set_name="soy"):
+    cfg = SETS[set_name]
     overall = paired_stats(winners)
     young = winners[winners["young_share"] >= 0.3]
     old = winners[winners["young_share"] < 0.3]
     passed = overall["ll_hi"] < 0.0
     lines = [
-        "# Ganyan — Soy (Baba/Anne) Özellikleri Walk-Forward Değerlendirmesi",
+        f"# Ganyan — {cfg['title']} Walk-Forward Değerlendirmesi",
         "",
-        f"**Karar:** **{'GEÇTİ' if passed else 'GEÇMEDİ'}** — `ll(v3_agf_soy) − ll(v1_agf) = {overall['ll_diff']:+.5f}`, "
+        f"**Karar:** **{'GEÇTİ' if passed else 'GEÇMEDİ'}** — `ll({cfg['name']}) − ll(v1_agf) = {overall['ll_diff']:+.5f}`, "
         f"2000 tekrarlı koşu-eşli bootstrap %95 GA `[{overall['ll_lo']:+.5f}, {overall['ll_hi']:+.5f}]` "
         f"(geçme koşulu: üst sınır < 0, `v2_agf_hava` kapısıyla aynı).",
         "",
-        f"Eklenen özellikler: {', '.join('`'+c+'`' for c in SOY_COLS)} (yalnız D gününden önceki yavru sonuçları, büzülmeli).",
+        f"Eklenen özellikler: {', '.join('`'+c+'`' for c in cfg['cols'])}.",
         f"Genç-at kümesi: koşudaki atların en az %30'u `h_n <= {YOUNG_MAX_STARTS}` olan koşular.",
         "",
-        "| Küme | Koşu | `v1_agf` LL | `v3_agf_soy` LL | LL Fark | LL %95 GA | `v1` 1.Tercih | `v3` 1.Tercih | 1.Tercih Fark (%95 GA) |",
+        f"| Küme | Koşu | `v1_agf` LL | `{cfg['name']}` LL | LL Fark | LL %95 GA | `v1` 1.Tercih | `{cfg['name']}` 1.Tercih | 1.Tercih Fark (%95 GA) |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for label, w in [("Tüm koşular", winners), ("Genç at ağırlıklı", young), ("Diğer", old)]:
@@ -98,22 +105,24 @@ def format_report(winners):
             f"`[{s['ll_lo']:+.5f}, {s['ll_hi']:+.5f}]` | {s['acc_v1']:.2%} | {s['acc_v3']:.2%} | "
             f"`{s['acc_diff']:+.2%}` (`{s['acc_lo']:+.2%}`…`{s['acc_hi']:+.2%}`) |"
         )
-    lines += ["", "> Kapanış AGF kullanılır; canlı AGF daha az bilgi içerir. Damsire (anne babası) veride yok, eklenmedi.", ""]
+    lines += ["", "> Kapanış AGF kullanılır; canlı AGF daha az bilgi içerir. Damsire (anne babası) veride yok.", ""]
     return "\n".join(lines)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default="data/ganyan.db")
-    ap.add_argument("--out", default="reports/SOY.md")
+    ap.add_argument("--set", choices=sorted(SETS), default="soy")
+    ap.add_argument("--out", default=None)
     args = ap.parse_args()
     conn = init_db(args.db)
     runners_df = load_runners_from_db(conn)
     print(f"Loaded {len(runners_df)} runner rows.", flush=True)
-    winners = run_soy_walk_forward(runners_df)
+    winners = run_soy_walk_forward(runners_df, args.set)
+    args.out = args.out or SETS[args.set]["out"]
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
-        f.write(format_report(winners))
+        f.write(format_report(winners, args.set))
     print(f"Wrote report to {args.out}")
     conn.close()
 

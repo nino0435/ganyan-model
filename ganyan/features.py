@@ -126,6 +126,37 @@ def get_soy_feature_cols():
     return with_agf + SOY_COLS
 
 
+STABLE_COLS = [
+    "own_mates",
+    "own_mate_agf",
+    "own_is_top",
+    "trn_mates",
+    "trn_mate_agf",
+    "trn_is_top",
+]
+
+
+def get_stable_feature_cols():
+    """Return v4_agf_ahir feature column list = v1_agf + same-owner / same-trainer entry features."""
+    _, with_agf = get_feature_cols()
+    return with_agf + STABLE_COLS
+
+
+def _attach_stable(df):
+    """Same-race stablemate features from program columns only (owner/trainer/AGF known pre-race)."""
+    for who, p in (("owner", "own"), ("trainer", "trn")):
+        key = df[who].astype("string").str.strip().replace("", pd.NA)
+        g = df.groupby(["race_id", key])
+        share = df["agf_share"].fillna(0.0)
+        n = g["race_id"].transform("size").where(key.notna(), 1)
+        tot = share.groupby([df["race_id"], key]).transform("sum").where(key.notna(), share)
+        df[f"{p}_mates"] = (n - 1).astype(float)
+        df[f"{p}_mate_agf"] = tot - share
+        top = share.groupby([df["race_id"], key]).transform("max")
+        df[f"{p}_is_top"] = ((share >= top) & (n > 1)).astype(float)
+    return df
+
+
 def _prior_sums(df, keys, cols):
     """Per-row sums of `cols` over the same `keys` group on dates strictly before the row's date."""
     day = df.groupby(keys + ["date"])[cols].sum()
@@ -429,4 +460,4 @@ def build_features(runners_df, ref_end="2025-07-01", weather_df=None):
         columns=["_w_cnt", "_w_sum", "_d_cnt", "_d_sum", "_sw_cnt", "_sw_sum", "_sd_cnt", "_sd_sum"]
     )
 
-    return _attach_pedigree(df)
+    return _attach_stable(_attach_pedigree(df))

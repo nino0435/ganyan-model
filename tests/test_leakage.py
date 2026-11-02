@@ -233,3 +233,25 @@ def test_pedigree_features_use_prior_offspring_only():
     assert np.allclose(first["sire_fpct"], 0.5)
     later = out[out["date"] == pd.Timestamp("2026-07-05")]
     assert (later["sire_n"] > 0).all()
+
+
+def test_stablemate_features_count_mates_and_ignore_results():
+    from ganyan.features import STABLE_COLS
+
+    pair_keys = ["SIRE_0|DAM_0|2022", "SIRE_1|DAM_1|2022"]
+    raw = _make_synthetic_history()
+    raw["owner"] = np.where(raw["horse_key"].isin(pair_keys), "A", "SOLO_" + raw["horse_key"])
+    out = build_features(raw, ref_end="2025-07-01")
+    pair = out[out["horse_key"].isin(pair_keys)]
+    assert (pair["own_mates"] == 1).all()
+    assert pair.groupby("race_id")["own_is_top"].sum().eq(1).all()
+    solo = out[~out["horse_key"].isin(pair_keys)]
+    assert (solo["own_mates"] == 0).all() and (solo["own_is_top"] == 0).all()
+
+    mod = raw.copy()
+    mod["finish"] = 5 - mod["finish"]
+    mod["time_s"] = mod["time_s"] + 3.0
+    flipped = build_features(mod, ref_end="2025-07-01")
+    a = out.set_index(["race_id", "horse_key"])[STABLE_COLS].sort_index()
+    b = flipped.set_index(["race_id", "horse_key"])[STABLE_COLS].sort_index()
+    pd.testing.assert_frame_equal(a, b)
