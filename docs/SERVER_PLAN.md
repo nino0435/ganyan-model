@@ -37,7 +37,7 @@ AGF canlı verisi de aynı siteden geliyor; engel gelirse ileri test hiç çalı
 - Linux (Ubuntu 24.04 LTS), saat dilimi `Europe/Istanbul` (scriptler `TZ=Europe/Istanbul` kullanıyor ama sistem TZ'yi de ayarla).
 - launchd yerine **systemd timer** (ya da cron). Mevcut işler:
   - `sabah`: ilk yarış −45 dk (haftanın gününe göre değişen saat; bkz. `ops/launchd/com.ganyan.sabah.plist`). Sunucuda daha basit: günlük 10:30'da çalıştır (her günün ilk yarışı daha geç).
-  - `tekrar`: 11:30–17:00 her 30 dk, `daily_job.sh tekrar`.
+  - `tekrar`: 11:30–23:00 her 30 dk (5 Kas 2026: gece pistleri için uzatıldı), `daily_job.sh tekrar`.
   - `aksam`: 00:45, dünü işler.
   - `uyanik` (caffeinate) sunucuda gereksiz.
 - Aynı `scripts/daily_job.sh` kullanılır (bash; `stat -f %z`/`date -v` BSD komutları **GNU'da farklı** → Linux için uyarlanmalı: `stat -c %s`, `date -d 'yesterday'`, `find -mmin`). Bu, portlamanın tek kod değişikliği.
