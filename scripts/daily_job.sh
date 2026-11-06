@@ -39,6 +39,20 @@ step() {
   if "$PY" -I "$@"; then log "$name OK"; else local rc=$?; log "$name HATA($rc)"; FAIL=1; fi
 }
 
+# Gündüz Mac okul ağındayken TJK açılmayabiliyor; forward_log bunu sessizce "0 tahmin" diye geçer.
+# Erişim yoksa log'a yaz, günde bir kez bildirim göster (işi yine de çalıştırır).
+if [ "$MODE" != aksam ]; then
+  PROBE="$(curl -sL --max-time 10 "${TJK_PROBE_URL:-https://www.tjk.org/}" || true)"
+  case "$PROBE" in *[Tt][Jj][Kk]*) ;; *)
+    log "UYARI: TJK'ya ulaşılamıyor, tahmin yazılamayabilir"
+    MARK="$ROOT/data/.tjk_unreach_$D"
+    if [ ! -e "$MARK" ]; then
+      touch "$MARK"
+      osascript -e "display notification \"TJK'ya ulaşılamıyor ($D) — Mac'i hotspot'a bağla\" with title \"Ganyan\"" || true
+    fi ;;
+  esac
+fi
+
 if [ "$MODE" = tekrar ]; then
   step forward_log scripts/forward_log.py --date "$D"
 elif [ "$MODE" = sabah ]; then
