@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>LANG</key>
+		<string>en_US.UTF-8</string>
+	</dict>
+	<key>Label</key>
+	<string>com.ganyan.gozcu</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/berhantekdemir/AndroidStudioProjects/ganyan/scripts/daily_job.sh</string>
+		<string>gozcu</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/berhantekdemir/Library/Logs/ganyan-daily.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/berhantekdemir/Library/Logs/ganyan-daily.log</string>
+	<key>StartInterval</key>
+	<integer>300</integer>
+</dict>
+</plist>

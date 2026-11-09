@@ -1,7 +1,8 @@
 #!/bin/bash
 # Günlük ileri test işi (launchd çağırır). Kullanım: scripts/daily_job.sh sabah|aksam [YYYY-MM-DD]
 #   sabah: program + canlı AGF → tahmin kaydı (yarışlardan önce)
-#   tekrar: gün içi yeniden deneme; yalnız forward_log (AGF sonradan yayınlanan koşuları ekler, kayıtlılara dokunmaz)
+#   gozcu: 5 dk'da bir; bugünün koşularını algılar, AGF çıkan koşuya yarıştan önce tahmin yazar (sessiz çalışır)
+#   tekrar: (eski) gün içi yeniden deneme; yalnız forward_log (AGF sonradan yayınlanan koşuları ekler, kayıtlılara dokunmaz)
 #   aksam: sonuçlar → FORWARD.md → JSON export (yarışlardan sonra; 06:00'dan önce çalışırsa dünü işler)
 set -u -o pipefail
 
@@ -17,7 +18,7 @@ exec >>"$LOG" 2>&1
 
 log() { echo "$(TZ=Europe/Istanbul date +%Y-%m-%dT%H:%M:%S%z) [$MODE] $*"; }
 
-case "$MODE" in sabah|aksam|tekrar) ;; *) log "kullanım: $0 sabah|aksam|tekrar [YYYY-MM-DD]"; exit 2 ;; esac
+case "$MODE" in sabah|aksam|tekrar|gozcu) ;; *) log "kullanım: $0 sabah|aksam|tekrar|gozcu [YYYY-MM-DD]"; exit 2 ;; esac
 
 if [ -n "${2:-}" ]; then
   D="$2"
@@ -29,7 +30,7 @@ fi
 
 # Yarım kalmış işin kilidi 6 saatten eskiyse sil.
 if [ -d "$LOCK" ] && [ -n "$(find "$LOCK" -maxdepth 0 -mmin +360)" ]; then rmdir "$LOCK"; fi
-if ! mkdir "$LOCK" 2>/dev/null; then log "kilit var, çıkılıyor"; exit 0; fi
+if ! mkdir "$LOCK" 2>/dev/null; then [ "$MODE" = gozcu ] || log "kilit var, çıkılıyor"; exit 0; fi
 trap 'rmdir "$LOCK"' EXIT
 
 FAIL=0
@@ -44,16 +45,22 @@ step() {
 if [ "$MODE" != aksam ]; then
   PROBE="$(curl -sL --max-time 10 "${TJK_PROBE_URL:-https://www.tjk.org/}" || true)"
   case "$PROBE" in *[Tt][Jj][Kk]*) ;; *)
-    log "UYARI: TJK'ya ulaşılamıyor, tahmin yazılamayabilir"
+    [ "$MODE" = gozcu ] || log "UYARI: TJK'ya ulaşılamıyor, tahmin yazılamayabilir"
     MARK="$ROOT/data/.tjk_unreach_$D"
     if [ ! -e "$MARK" ]; then
       touch "$MARK"
+      [ "$MODE" != gozcu ] || log "UYARI: TJK'ya ulaşılamıyor, tahmin yazılamayabilir"
       osascript -e "display notification \"TJK'ya ulaşılamıyor ($D) — Mac'i hotspot'a bağla\" with title \"Ganyan\"" || true
     fi ;;
   esac
 fi
 
-if [ "$MODE" = tekrar ]; then
+if [ "$MODE" = gozcu ]; then
+  # Her 5 dk çağrılır: yalnız iş yaptığında log'a yazar.
+  OUT="$("$PY" -I scripts/gozcu.py --date "$D" 2>&1)"; RC=$?
+  [ -z "$OUT" ] || log "$OUT"
+  if [ "$RC" -ne 0 ]; then log "gozcu HATA($RC)"; FAIL=1; fi
+elif [ "$MODE" = tekrar ]; then
   step forward_log scripts/forward_log.py --date "$D"
 elif [ "$MODE" = sabah ]; then
   step update_daily scripts/update_daily.py --date "$D"
@@ -68,4 +75,4 @@ if [ "$FAIL" -ne 0 ]; then
   osascript -e "display notification \"$MODE işi başarısız ($D), log: ~/Library/Logs/ganyan-daily.log\" with title \"Ganyan\"" || true
   exit 1
 fi
-log "bitti"
+[ "$MODE" = gozcu ] || log "bitti"

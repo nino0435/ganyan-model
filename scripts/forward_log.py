@@ -19,8 +19,11 @@ IST_TZ = ZoneInfo("Europe/Istanbul")
 MODEL_VERSION = "v1_agf"
 
 
-def forward_log(date_str, db_path="data/ganyan.db", prog_dir="data/raw/program", do_snapshot=True, created_at=None):
-    """Run forward prediction logging for date_str. Does not overwrite existing predictions for the same model_version."""
+def forward_log(date_str, db_path="data/ganyan.db", prog_dir="data/raw/program", do_snapshot=True, created_at=None,
+                race_ids=None):
+    """Run forward prediction logging for date_str. Does not overwrite existing predictions for the same model_version.
+
+    race_ids verilirse yalnız o koşular için tahmin yazılır (gözcü: koşu başına)."""
     if do_snapshot:
         snapshot_agf(date_str, db_path=db_path, prog_dir=prog_dir)
 
@@ -85,6 +88,8 @@ def forward_log(date_str, db_path="data/ganyan.db", prog_dir="data/raw/program",
     )
     train_df = feat_df[ok_train]
     today_df = feat_df[feat_df["date"] == pd.Timestamp(date_str)].copy()
+    if race_ids is not None:
+        today_df = today_df[today_df["race_id"].isin(list(race_ids))].copy()
 
     # AGF henüz yayınlanmadıysa o koşuyu yazma: INSERT OR IGNORE ilk kaydı kalıcı yapar,
     # AGF'siz (neredeyse tekdüze) tahmin ileri testi bozar. Sonraki çalıştırma yazar.
