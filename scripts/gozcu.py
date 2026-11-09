@@ -71,6 +71,8 @@ def missed_races(conn, date_str, hm):
 
 def _notify_missed(date_str, missed, mark_dir):
     """Kaçan koşu sayısı arttıkça (gün başına) macOS bildirimi göster."""
+    if sys.platform != "darwin":
+        return
     mark = os.path.join(mark_dir, f".gozcu_missed_{date_str}")
     try:
         seen = int(open(mark).read().strip())
@@ -85,7 +87,15 @@ def _notify_missed(date_str, missed, mark_dir):
     )
 
 
-def run(date_str, now, db_path="data/ganyan.db", prog_dir="data/raw/program", fetch=True, notify=True):
+def run(
+    date_str,
+    now,
+    db_path="data/ganyan.db",
+    prog_dir="data/raw/program",
+    fetch=True,
+    notify=True,
+    force_discover=False,
+):
     hm = now.strftime("%H:%M")
     if hm < START_HM:
         return 0
@@ -93,7 +103,7 @@ def run(date_str, now, db_path="data/ganyan.db", prog_dir="data/raw/program", fe
     try:
         pend = pending_races(conn, date_str, hm)
         known = {r[0] for r in conn.execute("SELECT DISTINCT city FROM races WHERE date = ?", (date_str,))}
-        discover = fetch and (not known or now.minute % DISCOVERY_MIN < DISCOVERY_SLACK)
+        discover = fetch and (force_discover or not known or now.minute % DISCOVERY_MIN < DISCOVERY_SLACK)
         if not pend and not discover:
             return 0
 
@@ -132,9 +142,17 @@ def main():
     ap.add_argument("--db", default="data/ganyan.db")
     ap.add_argument("--no-fetch", action="store_true")
     ap.add_argument("--no-notify", action="store_true")
+    ap.add_argument("--force-discover", action="store_true")
     args = ap.parse_args()
     now = datetime.datetime.fromisoformat(args.now) if args.now else datetime.datetime.now(IST_TZ)
-    run(args.date or now.date().isoformat(), now, db_path=args.db, fetch=not args.no_fetch, notify=not args.no_notify)
+    run(
+        args.date or now.date().isoformat(),
+        now,
+        db_path=args.db,
+        fetch=not args.no_fetch,
+        notify=not args.no_notify,
+        force_discover=args.force_discover,
+    )
 
 
 if __name__ == "__main__":

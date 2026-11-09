@@ -75,3 +75,34 @@ def test_run_without_pending_or_discovery_does_not_touch_network(tmp_path, monke
     now = datetime.datetime(2026, 11, 9, 10, 17)  # dakika 17: keşif penceresi dışında, bekleyen yok
     assert gozcu.run(D, now, db_path=str(tmp_path / "t.db")) == 0
     assert called == []
+
+
+def test_run_force_discover_triggers_discovery_outside_window(tmp_path, monkeypatch):
+    conn = init_db(tmp_path / "t.db")
+    conn.execute(
+        "INSERT INTO races (race_id, date, city, race_no, post_time, status) VALUES (?,?,?,?,?,?)",
+        (f"{D}_Bursa_1", D, "Bursa", 1, "09:00", "result"),
+    )
+    conn.commit()
+    conn.close()
+    called = []
+    monkeypatch.setattr(gozcu, "domestic_cities", lambda *a, **k: called.append("disc") or ["Bursa"])
+    monkeypatch.setattr(gozcu, "snapshot_agf", lambda *a, **k: called.append("snap"))
+    now = datetime.datetime(2026, 11, 9, 10, 17)  # dakika 17: normalde keşif yok, force_discover ile var
+    assert gozcu.run(D, now, db_path=str(tmp_path / "t.db"), notify=False, force_discover=True) == 0
+    assert called == ["disc", "snap"]
+
+
+def test_notify_missed_skips_osascript_off_darwin(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(gozcu.sys, "platform", "linux")
+    monkeypatch.setattr(gozcu.subprocess, "run", lambda *a, **k: calls.append(a))
+    gozcu._notify_missed(D, [(f"{D}_Bursa_3", "Bursa 3. koşu 09:00")], str(tmp_path))
+    assert calls == []
+    assert not (tmp_path / f".gozcu_missed_{D}").exists()
+
+    monkeypatch.setattr(gozcu.sys, "platform", "darwin")
+    gozcu._notify_missed(D, [(f"{D}_Bursa_3", "Bursa 3. koşu 09:00")], str(tmp_path))
+    assert len(calls) == 1
+    assert calls[0][0][0] == "osascript"
+

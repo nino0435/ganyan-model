@@ -69,3 +69,4 @@ Tek kaynak = sunucu. Mac'i geçiş gününde durdur (`launchctl bootout`), geçm
 ## 9. Karar
 - Mevcut Mac sorunsuz uyanıyorsa 8 hafta için **sunucu zorunlu değil**; tek gerçek açık İzmir 17:15 / uyku. `caffeinate` süresini 17:00'a uzatmak 0 maliyet.
 - Gün kaybı sıfır olsun isteniyorsa: önce TR IP'li ya da test edilmiş AB VPS, ~10 € – ~800 TL.
+- Actions seçeneği: `docs/ACTIONS_PLAN.md`'ye bak.

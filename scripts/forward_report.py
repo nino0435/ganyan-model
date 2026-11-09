@@ -114,18 +114,30 @@ def build_forward_report(conn, model_version="v1_agf", budget_tl=1000.0, unit_tl
     return "\n".join(lines) + "\n"
 
 
+def forward_report(db_path="data/ganyan.db", out_path="reports/FORWARD.md", model_version="v1_agf"):
+    """Build and write forward-testing report to out_path (default: reports/FORWARD.md)."""
+    conn = init_db(db_path)
+    try:
+        md = build_forward_report(conn, model_version=model_version)
+    finally:
+        conn.close()
+    parent = os.path.dirname(str(out_path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(md)
+    return md
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("out_pos", nargs="?", help="Çıktı dosyası yolu (varsayılan: reports/FORWARD.md)")
     ap.add_argument("--db", default="data/ganyan.db")
-    ap.add_argument("--out", default="reports/FORWARD.md")
+    ap.add_argument("--out", default=None)
     args = ap.parse_args()
-    conn = init_db(args.db)
-    md = build_forward_report(conn)
-    os.makedirs(os.path.dirname(args.out), exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as f:
-        f.write(md)
-    conn.close()
-    print(f"Wrote forward report to {args.out}")
+    out_path = args.out or args.out_pos or "reports/FORWARD.md"
+    forward_report(db_path=args.db, out_path=out_path)
+    print(f"Wrote forward report to {out_path}")
 
 
 if __name__ == "__main__":

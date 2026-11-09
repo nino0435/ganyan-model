@@ -1,0 +1,140 @@
+name: Ganyan Tahmin
+
+on:
+  schedule:
+    # Türkiye saati (UTC+3, yaz saati yok) karşılıkları:
+    - cron: "0 6 * * *"    # TR 09:00 — isteğe bağlı
+    - cron: "0 7 * * *"    # TR 10:00 — kritik
+    - cron: "0 8 * * *"    # TR 11:00 — isteğe bağlı
+    - cron: "0 9 * * *"    # TR 12:00 — kritik
+    - cron: "0 10 * * *"   # TR 13:00 — isteğe bağlı
+    - cron: "30 11 * * *"  # TR 14:30 — kritik
+    - cron: "30 13 * * *"  # TR 16:30 — isteğe bağlı
+    - cron: "30 15 * * *"  # TR 18:30 — kritik
+    - cron: "30 17 * * *"  # TR 20:30 — isteğe bağlı
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Çalışma modu (tahmin | test)"
+        required: true
+        default: "tahmin"
+        type: choice
+        options:
+          - tahmin
+          - test
+      dry_run:
+        description: "Ağ ve veritabanı yazımı yapmadan doğrula (--dry-run)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ganyan-state
+  cancel-in-progress: false
+
+env:
+  TZ: Europe/Istanbul
+  PYTHONUTF8: "1"
+
+jobs:
+  tahmin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - name: İş başlangıç zamanını kaydet
+        run: echo "GANYAN_JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Depoyu indir
+        uses: actions/checkout@v4
+
+      - name: Python kurulumu
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: "pip"
+          cache-dependency-path: "requirements*.txt"
+
+      - name: Bağımlılıkları kur (tahmin)
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.mode == 'test') }}
+        run: pip install -r requirements.txt
+
+      - name: Bağımlılıkları kur ve testleri çalıştır (mode=test)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'test' }}
+        run: |
+          pip install -r requirements-dev.txt
+          python -m pytest -q
+
+      - name: actions-state dalını hazırla
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.mode == 'test') }}
+        run: |
+          if git ls-remote --exit-code --heads origin actions-state >/dev/null 2>&1; then
+            git fetch origin actions-state --depth=1
+            git worktree add state origin/actions-state
+            git -C state checkout -B actions-state origin/actions-state
+          else
+            git worktree add --detach state
+            git -C state checkout --orphan actions-state
+            git -C state rm -rf . >/dev/null 2>&1 || true
+          fi
+          mkdir -p state/predictions
+
+      - name: Durum önbelleğini geri yükle (actions/cache)
+        id: cache-restore
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.mode == 'test') }}
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/ganyan.db
+            data/raw
+          key: ganyan-state-${{ github.run_id }}
+          restore-keys: |
+            ganyan-state-
+
+      - name: Önbellek boşsa Release varlığından geri yükle (state-backup / state-seed)
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.mode == 'test') && ! inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -s data/ganyan.db ]; then
+            echo "Önbellekte veritabanı yok; Release varlığı deneniyor..."
+            if gh release download state-backup -p ganyan-state.tar.zst --clobber 2>/dev/null || \
+               gh release download state-seed -p ganyan-state.tar.zst --clobber 2>/dev/null; then
+              tar --zstd -xf ganyan-state.tar.zst
+              rm -f ganyan-state.tar.zst
+            fi
+          fi
+
+      - name: Gözcü / tahmin çalıştır
+        id: run
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.mode == 'test') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          EXTRA_ARGS=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            EXTRA_ARGS="--dry-run"
+          fi
+          python -I scripts/actions_run.py tahmin --db data/ganyan.db --state-dir state $EXTRA_ARGS
+
+      - name: Yeni tahmin varsa önbelleği kaydet
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.mode == 'test') && ! inputs.dry_run && steps.run.outputs.new_predictions != '0' && steps.run.outputs.new_predictions != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/ganyan.db
+            data/raw
+          key: ganyan-state-${{ github.run_id }}
+
+      - name: Tahminleri ve bütçeyi actions-state dalına kaydet
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.mode == 'test') && ! inputs.dry_run && steps.run.outputs.state_changed == 'true' }}
+        run: |
+          git -C state config user.name "github-actions[bot]"
+          git -C state config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C state add budget.json predictions/ 2>/dev/null || git -C state add -A
+          if ! git -C state diff --cached --quiet; then
+            git -C state commit -m "${{ steps.run.outputs.commit_msg }}"
+            git -C state push origin HEAD:refs/heads/actions-state
+          fi

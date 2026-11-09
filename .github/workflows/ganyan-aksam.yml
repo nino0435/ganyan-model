@@ -1,0 +1,120 @@
+name: Ganyan Akşam
+
+on:
+  schedule:
+    # TR 00:45 = UTC 21:45 (önceki UTC günü)
+    - cron: "45 21 * * *"  # TR 00:45 — gece sonuç/rapor/yedek
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Hedef tarih YYYY-MM-DD (isteğe bağlı; boşsa İstanbul'da dün)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ganyan-state
+  cancel-in-progress: false
+
+env:
+  TZ: Europe/Istanbul
+  PYTHONUTF8: "1"
+
+jobs:
+  aksam:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: İş başlangıç zamanını kaydet
+        run: echo "GANYAN_JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Depoyu indir
+        uses: actions/checkout@v4
+
+      - name: Python kurulumu
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: "pip"
+          cache-dependency-path: "requirements*.txt"
+
+      - name: Bağımlılıkları kur
+        run: pip install -r requirements.txt
+
+      - name: actions-state dalını hazırla
+        run: |
+          if git ls-remote --exit-code --heads origin actions-state >/dev/null 2>&1; then
+            git fetch origin actions-state --depth=1
+            git worktree add state origin/actions-state
+            git -C state checkout -B actions-state origin/actions-state
+          else
+            git worktree add --detach state
+            git -C state checkout --orphan actions-state
+            git -C state rm -rf . >/dev/null 2>&1 || true
+          fi
+          mkdir -p state/predictions
+
+      - name: Durum önbelleğini geri yükle (actions/cache)
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/ganyan.db
+            data/raw
+          key: ganyan-state-${{ github.run_id }}
+          restore-keys: |
+            ganyan-state-
+
+      - name: Önbellek boşsa Release varlığından geri yükle (state-backup / state-seed)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -s data/ganyan.db ]; then
+            echo "Önbellekte veritabanı yok; Release varlığı deneniyor..."
+            if gh release download state-backup -p ganyan-state.tar.zst --clobber 2>/dev/null || \
+               gh release download state-seed -p ganyan-state.tar.zst --clobber 2>/dev/null; then
+              tar --zstd -xf ganyan-state.tar.zst
+              rm -f ganyan-state.tar.zst
+            fi
+          fi
+
+      - name: Akşam güncellemesi, rapor ve durum paketi
+        id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DATE_ARG=""
+          if [ -n "${{ inputs.date }}" ]; then
+            DATE_ARG="--date ${{ inputs.date }}"
+          fi
+          python -I scripts/actions_run.py aksam --db data/ganyan.db --state-dir state --pack-archive ganyan-state.tar.zst $DATE_ARG
+
+      - name: Durum önbelleğini kaydet
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/ganyan.db
+            data/raw
+          key: ganyan-state-${{ github.run_id }}
+
+      - name: Gece yedeğini state-backup Release etiketine yükle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -s ganyan-state.tar.zst ]; then
+            gh release upload state-backup ganyan-state.tar.zst --clobber || \
+              gh release create state-backup ganyan-state.tar.zst --title "State Backup" --notes "Otomatik gece durum yedeği"
+          fi
+
+      - name: Rapor ve bütçeyi actions-state dalına kaydet
+        run: |
+          git -C state config user.name "github-actions[bot]"
+          git -C state config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C state add FORWARD.md budget.json predictions/ 2>/dev/null || git -C state add -A
+          if ! git -C state diff --cached --quiet; then
+            git -C state commit -m "${{ steps.run.outputs.commit_msg }}"
+            git -C state push origin HEAD:refs/heads/actions-state
+          fi
