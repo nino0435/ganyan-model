@@ -1,0 +1,36 @@
+name: Ganyan Bekçi
+
+# Tahmin/akşam işleri durursa issue açar (sahibi anılır → bildirim). Cloud Scheduler'dan bağımsız:
+# GitHub'ın kendi cron'u. Günde 6 kısa kontrol (~6 dk/gün). Saatler UTC (TR = UTC+3).
+on:
+  schedule:
+    - cron: "15 8,10,12,14,18,23 * * *"
+  workflow_dispatch:
+    inputs:
+      selftest:
+        description: "Bildirim yolunu dene (sahte issue açıp kapatır)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+jobs:
+  bekci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TZ: Europe/Istanbul
+    steps:
+      - uses: actions/checkout@v4
+      - name: Kontrol
+        run: |
+          if [ "${{ inputs.selftest }}" = "true" ]; then
+            python3 scripts/bekci.py --selftest
+          else
+            python3 scripts/bekci.py
+          fi

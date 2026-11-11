@@ -6,7 +6,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-PROJECT="${GCP_PROJECT:-mebplanrobotu}"
+PROJECT="${GCP_PROJECT:-ganyan-zamanlayici-2563}"  # ganyan'a ayrılmış GCP projesi (derspilot'tan bağımsız)
 LOCATION="${GCP_LOCATION:-europe-west1}"
 REPO="nino0435/ganyan-model"
 
@@ -31,7 +31,8 @@ upsert_job() {
     --quiet --project="$PROJECT" --location="$LOCATION" \
     --schedule="$sched" --time-zone="Europe/Istanbul" \
     --uri="$uri" --http-method=POST --headers="$HDRS" \
-    --message-body="$body" --description="$desc"
+    --message-body="$body" --description="$desc" \
+    --max-retry-attempts=2 --min-backoff=30s
 }
 
 upsert_job "ganyan-tahmin-saatlik" "0 9,10,11,12,13 * * *" "$TAHMIN_URI" '{"ref":"main","inputs":{"mode":"tahmin"}}' "Ganyan tahmin (TR 09:00-13:00)"
