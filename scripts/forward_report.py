@@ -9,6 +9,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from ganyan.agf_check import agf_complete
 from ganyan.allocator import allocate_coupon_a, allocate_fixed_k
 from ganyan.db import init_db
 
@@ -39,6 +40,15 @@ def build_forward_report(conn, model_version="v1_agf", budget_tl=1000.0, unit_tl
     else:
         valid_df = df.copy()
 
+    # AGF bütünlüğü: bir ata bile '%0'/boş AGF'yle yazılmış ya da toplamı ~%100 olmayan koşu geçersizdir
+    # (TJK açılışta geçici placeholder basabiliyor); kayıt DB'de kalır, değerlendirmeye girmez.
+    n_bad_agf = 0
+    if not valid_df.empty:
+        agf_by_race = pd.to_numeric(valid_df["agf_used"], errors="coerce").groupby(valid_df["race_id"]).apply(list)
+        bad_ids = {rid for rid, vals in agf_by_race.items() if not agf_complete(vals)}
+        n_bad_agf = len(bad_ids)
+        valid_df = valid_df[~valid_df["race_id"].isin(bad_ids)].copy()
+
     valid_races = valid_df["race_id"].nunique() if not valid_df.empty else 0
     res_df = valid_df[(valid_df["status"] == "result") & (valid_df["scratched"].fillna(0) == 0)].copy()
 
@@ -50,6 +60,8 @@ def build_forward_report(conn, model_version="v1_agf", budget_tl=1000.0, unit_tl
         f"- **Toplam Kayıtlı Tahmin:** `{total_logged_races}` koşu (`{total_logged_rows}` at)",
         f"- **Koşu Öncesi Geçerli Tahmin (`created_at < post_time`):** `{valid_races}` koşu",
     ]
+    if n_bad_agf:
+        lines.append(f"- **AGF'si eksik/sıfır olduğu için dışlanan koşu:** `{n_bad_agf}`")
 
     if res_df.empty:
         lines.append("- **Sonuçlanmış Geçerli Koşu:** `0` (Henüz sonuçlanan ileri test koşusu yok; sonuçlar geldikçe bu rapor otomatik güncellenir.)")

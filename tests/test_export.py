@@ -85,7 +85,11 @@ def test_forward_log_and_report_respects_post_time(tmp_path):
     upsert_results(conn, parse_results_file(RES_FIX, date="2026-10-24", city="Ankara"))
     upsert_program(conn, parse_program_file(PROG_FIX, date="2026-10-27", city="Adana"))
     # Program fixture'ında AGF yok; forward_log AGF'siz koşuyu yazmadığı için doldur.
-    conn.execute("UPDATE runners SET agf_close = 10.0 WHERE race_id LIKE '2026-10-27_%'")
+    # AGF toplamı koşu başına %100 olmalı (agf_check kuralı): eşit dağıt.
+    conn.execute(
+        "UPDATE runners SET agf_close = 100.0 / (SELECT COUNT(*) FROM runners r2 WHERE r2.race_id = runners.race_id)"
+        " WHERE race_id LIKE '2026-10-27_%'"
+    )
     conn.commit()
     conn.close()
 

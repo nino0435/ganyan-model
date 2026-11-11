@@ -10,6 +10,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from ganyan.agf_check import agf_complete
 from ganyan.db import init_db
 from ganyan.features import build_features, get_feature_cols
 from ganyan.model import fit_predict_df
@@ -94,7 +95,9 @@ def forward_log(date_str, db_path="data/ganyan.db", prog_dir="data/raw/program",
     # AGF henüz yayınlanmadıysa o koşuyu yazma: INSERT OR IGNORE ilk kaydı kalıcı yapar,
     # AGF'siz (neredeyse tekdüze) tahmin ileri testi bozar. Sonraki çalıştırma yazar.
     active = today_df[today_df["scratched"].fillna(0) == 0]
-    agf_ready = active.groupby("race_id")["agf_close"].apply(lambda s: bool(s.notna().all() and (s > 0).any()))
+    # Ayrıca her atın AGF'si > 0 ve toplam ~%100 olmalı (TJK açılışta '%0' placeholder basabiliyor).
+    all_agf = today_df.groupby("race_id")["agf_close"].apply(list).to_dict()
+    agf_ready = active.groupby("race_id")["agf_close"].apply(lambda s: agf_complete(s.tolist(), all_agf[s.name]))
     today_df = today_df[today_df["race_id"].map(agf_ready).fillna(False).astype(bool)].copy()
 
     if train_df.empty or today_df.empty:
