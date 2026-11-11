@@ -43,13 +43,13 @@ def pending_races(conn, date_str, hm):
 
 
 def agf_ready_ids(conn, race_ids):
-    """AGF yayınlanmış (en az bir AGF'li snapshot satırı olan) koşular."""
+    """AGF yayınlanmış (en az bir pozitif AGF'li snapshot satırı olan) koşular."""
     ids = list(race_ids)
     if not ids:
         return []
     q = ",".join("?" * len(ids))
     rows = conn.execute(
-        f"SELECT DISTINCT race_id FROM agf_snapshots WHERE agf_pct IS NOT NULL AND race_id IN ({q})", ids
+        f"SELECT DISTINCT race_id FROM agf_snapshots WHERE agf_pct > 0 AND race_id IN ({q})", ids
     ).fetchall()
     return [r[0] for r in rows]
 
@@ -60,7 +60,7 @@ def missed_races(conn, date_str, hm):
         """
         SELECT r.race_id, r.city, r.race_no, r.post_time FROM races r
         WHERE r.date = ? AND r.post_time IS NOT NULL AND r.post_time <= ? AND r.status != 'cancelled'
-          AND EXISTS (SELECT 1 FROM agf_snapshots s WHERE s.race_id = r.race_id AND s.agf_pct IS NOT NULL)
+          AND EXISTS (SELECT 1 FROM agf_snapshots s WHERE s.race_id = r.race_id AND s.agf_pct > 0)
           AND NOT EXISTS (SELECT 1 FROM predictions p WHERE p.race_id = r.race_id AND p.model_version = ?)
         ORDER BY r.post_time, r.city, r.race_no
         """,

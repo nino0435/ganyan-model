@@ -49,13 +49,13 @@ def forward_log(date_str, db_path="data/ganyan.db", prog_dir="data/raw/program",
         conn.close()
         return 0
 
-    # Overlay latest agf_snapshots for target date if available
+    # Overlay latest agf_snapshots for target date if available (ignore 0.0 placeholders)
     snaps = pd.read_sql_query(
         """
         SELECT s.race_id, s.prog_no, s.agf_pct, s.agf_rank
         FROM agf_snapshots s
         JOIN races r ON s.race_id = r.race_id
-        WHERE r.date = ?
+        WHERE r.date = ? AND s.agf_pct > 0
         ORDER BY s.captured_at ASC
         """,
         conn,
@@ -94,7 +94,7 @@ def forward_log(date_str, db_path="data/ganyan.db", prog_dir="data/raw/program",
     # AGF henüz yayınlanmadıysa o koşuyu yazma: INSERT OR IGNORE ilk kaydı kalıcı yapar,
     # AGF'siz (neredeyse tekdüze) tahmin ileri testi bozar. Sonraki çalıştırma yazar.
     active = today_df[today_df["scratched"].fillna(0) == 0]
-    agf_ready = active.groupby("race_id")["agf_close"].apply(lambda s: bool(s.notna().all()))
+    agf_ready = active.groupby("race_id")["agf_close"].apply(lambda s: bool(s.notna().all() and (s > 0).any()))
     today_df = today_df[today_df["race_id"].map(agf_ready).fillna(False).astype(bool)].copy()
 
     if train_df.empty or today_df.empty:

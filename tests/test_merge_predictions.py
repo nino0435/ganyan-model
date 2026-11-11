@@ -112,3 +112,29 @@ def test_karsilastir_markdown_table_is_readonly_and_accurate(tmp_path):
 
     md = compare_databases(str(db_mac), str(db_act), from_date=D)
     assert f"| {D} | 5 | 1 | 1 | 2 | 1 |" in md
+
+
+def test_merge_predictions_prefers_positive_agf_over_earlier_zero_agf(tmp_path):
+    """Erken yazılmış ama agf_used=0.0 olan bozuk kayıt, sonraki gerçek AGF kaydını ezmemeli."""
+    db_mac, db_act = _setup_pair(tmp_path)
+    c_mac = init_db(db_mac)
+    c_act = init_db(db_act)
+    c_mac.execute("INSERT INTO races (race_id, date, city, race_no, post_time, status) VALUES (?,?,?,?,?,?)", (f"{D}_Bursa_6", D, "Bursa", 6, "17:00", "scheduled"))
+    c_act.execute("INSERT INTO races (race_id, date, city, race_no, post_time, status) VALUES (?,?,?,?,?,?)", (f"{D}_Bursa_6", D, "Bursa", 6, "17:00", "scheduled"))
+    # Mac erken (12:09) ama agf_used=0.0; Actions geç (13:00) ama gerçek agf_used=45.0
+    c_mac.execute("INSERT INTO predictions VALUES (?,?,?,?,?,?)", (f"{D}_Bursa_6", 1, "v1_agf", f"{D}T12:09:00", 0.15, 0.0))
+    c_act.execute("INSERT INTO predictions VALUES (?,?,?,?,?,?)", (f"{D}_Bursa_6", 1, "v1_agf", f"{D}T13:00:00", 0.48, 45.0))
+    c_mac.commit(); c_act.commit(); c_mac.close(); c_act.close()
+
+    # Mac -> Actions birleştirmesinde Actions'taki 45.0 korunmalı
+    merge_predictions(str(db_mac), str(db_act), dry_run=False)
+    conn_act = init_db(db_act)
+    assert conn_act.execute("SELECT agf_used FROM predictions WHERE race_id=?", (f"{D}_Bursa_6",)).fetchone()[0] == 45.0
+    conn_act.close()
+
+    # Actions -> Mac birleştirmesinde Mac'teki 0.0 gerçek 45.0 ile güncellenmeli
+    merge_predictions(str(db_act), str(db_mac), dry_run=False)
+    conn_mac = init_db(db_mac)
+    assert conn_mac.execute("SELECT agf_used FROM predictions WHERE race_id=?", (f"{D}_Bursa_6",)).fetchone()[0] == 45.0
+    conn_mac.close()
+

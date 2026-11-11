@@ -59,7 +59,7 @@ def build_forward_report(conn, model_version="v1_agf", budget_tl=1000.0, unit_tl
     res_df["p_norm"] = res_df["p_win"] / res_df.groupby("race_id")["p_win"].transform("sum")
     agf_used = pd.to_numeric(res_df["agf_used"], errors="coerce")
     agf_close = pd.to_numeric(res_df["agf_close"], errors="coerce")
-    agf_col = agf_used.fillna(agf_close).fillna(1.0)
+    agf_col = agf_used.where(agf_used > 0).fillna(agf_close.where(agf_close > 0)).fillna(1.0)
     res_df["p_agf"] = agf_col / agf_col.groupby(res_df["race_id"]).transform("sum")
 
     res_df["rk_mod"] = res_df.groupby("race_id")["p_norm"].rank(ascending=False, method="first")

@@ -118,6 +118,13 @@ def test_forward_log_skips_races_without_agf(tmp_path):
     assert forward_log("2026-10-27", db_path=str(db_path), do_snapshot=False, created_at="2026-10-27T05:00:00") == 0
     conn = init_db(db_path)
     assert conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 0
+    # Tüm atlara 0.0 basılmışsa da yazmamalı
+    conn.execute("UPDATE runners SET agf_close = 0.0 WHERE race_id IN (SELECT race_id FROM races WHERE date = '2026-10-27')")
+    conn.commit()
+    conn.close()
+    assert forward_log("2026-10-27", db_path=str(db_path), do_snapshot=False, created_at="2026-10-27T05:05:00") == 0
+    conn = init_db(db_path)
+    assert conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 0
     conn.close()
 
 

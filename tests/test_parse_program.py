@@ -122,3 +122,36 @@ def test_parse_live_program_html():
     assert snaps[0]["ganyan_live"] == pytest.approx(31.90)
 
 
+def test_parse_program_and_html_ignore_all_zero_placeholder_agf(tmp_path):
+    """TJK açılışta tüm atlara '%0(1)..%0(N)' bastığında AGF henüz yok (None) sayılmalı."""
+    from scripts.snapshot_agf import parse_live_program_html
+
+    csv_file = tmp_path / "prog.csv"
+    csv_file.write_text(
+        "İstanbul;(91. Yarış Günü);11/11/2026\n"
+        "1. Kosu : 14.00;Handikap 14; 3 Yaşlı Araplar; kg; 1500m; Sentetik\n"
+        "1;ALAZVUR;3y k e;BABA1;ANNE1;58;M.KAYA;SAH1;ANT1;1;%0(1);49;K1;10;17;\n"
+        "2;GÜMÜŞ;3y k e;BABA2;ANNE2;58;A.ASLAN;SAH2;ANT2;2;%0(2);47;K2;14;17;\n",
+        encoding="utf-8",
+    )
+    parsed = parse_program_file(csv_file, date="2026-11-11", city="İstanbul")
+    assert len(parsed["runners"]) == 2
+    assert all(r["agf_pct"] is None and r["agf_rank"] is None for r in parsed["runners"])
+
+    zero_html = """
+    <div>1. Koşu : 14.00</div>
+    <table>
+      <tr>
+        <td class="gunluk-GunlukYarisProgrami-SiraId">1</td>
+        <td class="gunluk-GunlukYarisProgrami-AGFORAN">%0(1)</td>
+      </tr>
+      <tr>
+        <td class="gunluk-GunlukYarisProgrami-SiraId">2</td>
+        <td class="gunluk-GunlukYarisProgrami-AGFORAN">%0(2)</td>
+      </tr>
+    </table>
+    """
+    assert parse_live_program_html(zero_html, "2026-11-11", "İstanbul") == []
+
+
+

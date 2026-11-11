@@ -62,7 +62,18 @@ def parse_live_program_html(html_text, date_str, city):
                 "agf_rank": agf_rank,
                 "ganyan_live": gny_live,
             })
-    return snapshots
+    agf_sums = {}
+    for s in snapshots:
+        if s["agf_pct"] is not None:
+            agf_sums[s["race_id"]] = agf_sums.get(s["race_id"], 0.0) + s["agf_pct"]
+    cleaned = []
+    for s in snapshots:
+        if s["agf_pct"] is not None and agf_sums.get(s["race_id"], 0.0) <= 0.0:
+            s["agf_pct"] = None
+            s["agf_rank"] = None
+        if s["agf_pct"] is not None or s["ganyan_live"] is not None:
+            cleaned.append(s)
+    return cleaned
 
 
 def snapshot_agf(date_str, db_path="data/ganyan.db", prog_dir="data/raw/program", cities=None):

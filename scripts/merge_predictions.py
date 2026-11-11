@@ -50,6 +50,14 @@ def merge_predictions(from_db, into_db, model_version="v1_agf", dry_run=False):
         to_update = []
         same = 0
 
+        valid_races_a = {
+            (r[0], r[2]) for r in rows_a if r[5] is not None and float(r[5]) > 0.0
+        }
+        valid_races_b = {
+            (r[0], r[2]) for r in rows_b if r[5] is not None and float(r[5]) > 0.0
+        }
+        any_valid_check = bool(valid_races_a or valid_races_b)
+
         for race_id, prog_no, mv, created_at, p_win, agf_used in rows_a:
             pk = (race_id, int(prog_no), mv)
             a_ts = str(created_at or "")
@@ -57,7 +65,13 @@ def merge_predictions(from_db, into_db, model_version="v1_agf", dry_run=False):
                 to_insert.append((race_id, int(prog_no), mv, a_ts, p_win, agf_used))
             else:
                 b_ts, _, _ = map_b[pk]
-                if a_ts and (not b_ts or a_ts < b_ts):
+                a_valid = (race_id, mv) in valid_races_a if any_valid_check else True
+                b_valid = (race_id, mv) in valid_races_b if any_valid_check else True
+                if a_valid and not b_valid:
+                    to_update.append((a_ts, p_win, agf_used, race_id, int(prog_no), mv))
+                elif b_valid and not a_valid:
+                    same += 1
+                elif a_ts and (not b_ts or a_ts < b_ts):
                     to_update.append((a_ts, p_win, agf_used, race_id, int(prog_no), mv))
                 else:
                     same += 1

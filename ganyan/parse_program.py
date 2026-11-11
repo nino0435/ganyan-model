@@ -123,6 +123,17 @@ def parse_program_file(path, date=None, city=None):
                 "best_time_s": race_time(c[15]),
             })
 
+    # TJK AGF açılmadan hemen önce tüm atlara geçici '%0(1)..%0(N)' basabiliyor;
+    # koşu toplam AGF'si 0 ise henüz yayınlanmamış kabul et.
+    agf_sums = {}
+    for r in runners:
+        if r["agf_pct"] is not None:
+            agf_sums[r["race_id"]] = agf_sums.get(r["race_id"], 0.0) + r["agf_pct"]
+    for r in runners:
+        if r["agf_pct"] is not None and agf_sums.get(r["race_id"], 0.0) <= 0.0:
+            r["agf_pct"] = None
+            r["agf_rank"] = None
+
     return {
         "date": date,
         "city": city,

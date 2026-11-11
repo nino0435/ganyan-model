@@ -44,7 +44,18 @@ def test_pending_races_lists_unpredicted_future_noncancelled(tmp_path):
 
 def test_agf_ready_ids_only_races_with_agf_rows(tmp_path):
     conn = _db(tmp_path)
+    # 0.0 placeholder AGF hazır veya kaçmış sayılmamalı
+    conn.execute(
+        "INSERT INTO agf_snapshots (race_id, prog_no, captured_at, agf_pct, agf_rank) VALUES (?,?,?,?,?)",
+        (f"{D}_Urfa_2", 1, f"{D}T08:00:00+03:00", 0.0, 1),
+    )
+    conn.execute(
+        "INSERT INTO agf_snapshots (race_id, prog_no, captured_at, agf_pct, agf_rank) VALUES (?,?,?,?,?)",
+        (f"{D}_Bursa_4", 1, f"{D}T08:00:00+03:00", 0.0, 1),
+    )
+    conn.commit()
     assert gozcu.agf_ready_ids(conn, [f"{D}_Bursa_1", f"{D}_Urfa_2"]) == [f"{D}_Bursa_1"]
+    assert [m[0] for m in gozcu.missed_races(conn, D, "10:00")] == [f"{D}_Bursa_3"]
     assert gozcu.agf_ready_ids(conn, []) == []
 
 
