@@ -1,9 +1,6 @@
 name: Ganyan Akşam
 
 on:
-  schedule:
-    # TR 00:45 = UTC 21:45 (önceki UTC günü)
-    - cron: "45 21 * * *"  # TR 00:45 — gece sonuç/rapor/yedek
   workflow_dispatch:
     inputs:
       date:
