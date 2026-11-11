@@ -1,6 +1,6 @@
 {
   "month": "2026-11",
-  "used_min": 29,
+  "used_min": 31,
   "runs": [
     {
       "ts": "2026-11-09T22:51:47",
@@ -66,6 +66,11 @@
       "ts": "2026-11-11T04:11:29",
       "mode": "aksam",
       "billed_min": 3
+    },
+    {
+      "ts": "2026-11-11T04:28:57",
+      "mode": "aksam",
+      "billed_min": 2
     }
   ],
   "predictions_high_water": 2338
