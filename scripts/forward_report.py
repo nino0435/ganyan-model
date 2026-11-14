@@ -11,11 +11,56 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ganyan.agf_check import agf_complete
 from ganyan.allocator import allocate_coupon_a, allocate_fixed_k
+from ganyan.backtest import get_unit_tl
 from ganyan.db import init_db
 
+ROI_NOTE = (
+    "ROI kapanış öncesi oranlarla değil, kesinleşmiş ödemelerle hesaplanır; "
+    "küçük örneklemde tek büyük ikramiye sonucu belirler."
+)
 
-def build_forward_report(conn, model_version="v1_agf", budget_tl=1000.0, unit_tl=1.25):
-    """Evaluate strictly pre-race predictions (created_at < post_time) against outcomes."""
+
+def paired_bootstrap_ci(diff_values, n_boot=2000, seed=0):
+    """Race-paired bootstrap 95% CI (2000 resamples, default_rng(0)) for mean(diff_values)."""
+    d = np.asarray(diff_values, dtype=float)
+    n = len(d)
+    if n == 0:
+        return 0.0, 0.0, 0.0
+    mean_val = float(d.mean())
+    if n == 1:
+        return mean_val, mean_val, mean_val
+    rng = np.random.default_rng(seed)
+    bs = d[rng.integers(0, n, size=(n_boot, n))].mean(axis=1)
+    return mean_val, float(np.percentile(bs, 2.5)), float(np.percentile(bs, 97.5))
+
+
+def _parse_combo_ints(combo):
+    if combo is None or (isinstance(combo, float) and np.isnan(combo)):
+        return set()
+    out = set()
+    for part in str(combo).split(","):
+        s = part.strip()
+        if s:
+            try:
+                out.add(int(s))
+            except ValueError:
+                continue
+    return out
+
+
+def _list_model_versions(conn):
+    rows = conn.execute(
+        "SELECT DISTINCT model_version FROM predictions WHERE model_version IS NOT NULL"
+    ).fetchall()
+    found = {str(r[0]) for r in rows if str(r[0])}
+    if not found:
+        return ["v1_agf"]
+    ordered = ["v1_agf"] if "v1_agf" in found else []
+    ordered.extend(sorted(v for v in found if v != "v1_agf"))
+    return ordered
+
+
+def _build_version_lines(conn, model_version, budget_tl=1000.0, unit_tl=1.25, sec_prefix="##"):
     query = """
     SELECT
         p.race_id, p.prog_no, p.model_version, p.created_at, p.p_win, p.agf_used,
@@ -25,6 +70,7 @@ def build_forward_report(conn, model_version="v1_agf", budget_tl=1000.0, unit_tl
     JOIN races r ON p.race_id = r.race_id
     LEFT JOIN runners run ON p.race_id = run.race_id AND p.prog_no = run.prog_no
     WHERE p.model_version = ?
+    ORDER BY r.date, r.city, r.race_no, p.prog_no
     """
     df = pd.read_sql_query(query, conn, params=(model_version,))
 
@@ -53,8 +99,6 @@ def build_forward_report(conn, model_version="v1_agf", budget_tl=1000.0, unit_tl
     res_df = valid_df[(valid_df["status"] == "result") & (valid_df["scratched"].fillna(0) == 0)].copy()
 
     lines = [
-        "# Ganyan — İleri Test (Forward-Test) Raporu",
-        "",
         f"- **Model Sürümü:** `{model_version}`",
         f"- **Kayıt Tarih Aralığı:** `{min_date}` … `{max_date}`",
         f"- **Toplam Kayıtlı Tahmin:** `{total_logged_races}` koşu (`{total_logged_rows}` at)",
@@ -65,17 +109,20 @@ def build_forward_report(conn, model_version="v1_agf", budget_tl=1000.0, unit_tl
 
     if res_df.empty:
         lines.append("- **Sonuçlanmış Geçerli Koşu:** `0` (Henüz sonuçlanan ileri test koşusu yok; sonuçlar geldikçe bu rapor otomatik güncellenir.)")
-        return "\n".join(lines) + "\n"
+        return lines, False
 
     # Renormalize among active runners
-    res_df["p_norm"] = res_df["p_win"] / res_df.groupby("race_id")["p_win"].transform("sum")
+    p_win_col = pd.to_numeric(res_df["p_win"], errors="coerce").fillna(0.0)
+    p_sum = p_win_col.groupby(res_df["race_id"]).transform("sum")
+    p_cnt = res_df.groupby("race_id")["p_win"].transform("count")
+    res_df["p_norm"] = (p_win_col / p_sum.where(p_sum > 0)).fillna(1.0 / p_cnt)
     agf_used = pd.to_numeric(res_df["agf_used"], errors="coerce")
     agf_close = pd.to_numeric(res_df["agf_close"], errors="coerce")
     agf_col = agf_used.where(agf_used > 0).fillna(agf_close.where(agf_close > 0)).fillna(1.0)
     res_df["p_agf"] = agf_col / agf_col.groupby(res_df["race_id"]).transform("sum")
 
-    res_df["rk_mod"] = res_df.groupby("race_id")["p_norm"].rank(ascending=False, method="first")
-    res_df["rk_agf"] = res_df.groupby("race_id")["p_agf"].rank(ascending=False, method="first")
+    res_df["rk_mod"] = res_df.groupby("race_id")["p_norm"].rank(ascending=False, method="first", na_option="bottom")
+    res_df["rk_agf"] = res_df.groupby("race_id")["p_agf"].rank(ascending=False, method="first", na_option="bottom")
 
     winners = res_df[res_df["finish"] == 1]
     n_res_races = winners["race_id"].nunique()
@@ -84,49 +131,199 @@ def build_forward_report(conn, model_version="v1_agf", budget_tl=1000.0, unit_tl
     ll_mod = float(-np.log(winners["p_norm"].clip(lower=1e-6)).mean()) if len(winners) else 0.0
     ll_agf = float(-np.log(winners["p_agf"].clip(lower=1e-6)).mean()) if len(winners) else 0.0
 
+    if len(winners):
+        w_pair = pd.DataFrame({
+            "race_id": winners["race_id"].values,
+            "d_acc": (winners["rk_mod"] == 1).astype(float).values - (winners["rk_agf"] == 1).astype(float).values,
+            "d_ll": (-np.log(winners["p_norm"].clip(lower=1e-6)) + np.log(winners["p_agf"].clip(lower=1e-6))).values,
+        }).groupby("race_id", sort=False).mean()
+        _, acc_ci_lo, acc_ci_hi = paired_bootstrap_ci(w_pair["d_acc"].values)
+        _, ll_ci_lo, ll_ci_hi = paired_bootstrap_ci(w_pair["d_ll"].values)
+        bs_perf_str = f"1. tercih `[{acc_ci_lo:+.1%}, {acc_ci_hi:+.1%}]`, log-loss `[{ll_ci_lo:+.4f}, {ll_ci_hi:+.4f}]`"
+    else:
+        bs_perf_str = "—"
+
+    mod_favs = res_df[res_df["rk_mod"] == 1].set_index("race_id")
+    agf_favs = res_df[res_df["rk_agf"] == 1].set_index("race_id").reindex(mod_favs.index)
+    diff_mask = mod_favs["prog_no"].astype(int) != agf_favs["prog_no"].astype(int)
+    n_disagree = int(diff_mask.sum())
+    agf_won_disagree = int((agf_favs.loc[diff_mask, "finish"] == 1).sum())
+    mod_won_disagree = int((mod_favs.loc[diff_mask, "finish"] == 1).sum())
+
     lines.extend([
         f"- **Sonuçlanmış Geçerli Koşu:** `{n_res_races}`",
         "",
-        "## 1. Koşu Bazında Performans",
+        f"{sec_prefix} 1. Koşu Bazında Performans",
         "",
         "| Yöntem | 1. Tercih Kazandı | Log-Loss |",
         "|---|---:|---:|",
         f"| Anlık AGF Favorisi | {acc_agf:.1%} | {ll_agf:.4f} |",
         f"| Model (`{model_version}`) | {acc_mod:.1%} | {ll_mod:.4f} |",
         f"| **Fark (Model − AGF)** | **{acc_mod - acc_agf:+.1%}** | **{ll_mod - ll_agf:+.4f}** |",
+        "",
+        f"- **Koşu-Eşli Bootstrap %95 GA (Model − AGF, 2000 tekrar):** {bs_perf_str}",
+        f"- **Model ≠ AGF Favorisi:** `{n_disagree}` koşu (AGF favorisi kazandı: `{agf_won_disagree}`, Model favorisi kazandı: `{mod_won_disagree}`)",
     ])
 
     # Evaluate altili on logged races
-    alt_df = pd.read_sql_query("SELECT * FROM altili", conn)
+    alt_df = pd.read_sql_query("SELECT * FROM altili ORDER BY date, city, which", conn)
     by_race = {rid: grp for rid, grp in res_df.groupby("race_id")}
-    n_alt = hit_fk = hit_ma = 0
+    n_alt = n_alt_priced = 0
+    alt_stats = {
+        "fixed_k": {"hit": 0, "cost": 0.0, "ret": 0.0},
+        "agf_a": {"hit": 0, "cost": 0.0, "ret": 0.0},
+        "model_a": {"hit": 0, "cost": 0.0, "ret": 0.0},
+    }
     for _, row in alt_df.iterrows():
         rids = [f"{row['date']}_{row['city']}_{r}" for r in range(int(row["start_race"]), int(row["end_race"]) + 1)]
         if len(rids) != 6 or not all(r in by_race for r in rids):
             continue
         n_alt += 1
+        known_u = get_unit_tl(row["date"])
+        u_tl = known_u if known_u is not None else unit_tl
+        if known_u is not None:
+            n_alt_priced += 1
+        payout_val = float(row["payout"]) if row["payout"] is not None and not pd.isna(row["payout"]) else 0.0
+
         legs_official = [set(int(x) for x in leg) for leg in json.loads(row["legs"])]
         legs_agf = [list(zip(by_race[r]["prog_no"], by_race[r]["p_agf"], by_race[r]["p_agf"])) for r in rids]
         legs_mod = [list(zip(by_race[r]["prog_no"], by_race[r]["p_norm"], by_race[r]["p_agf"])) for r in rids]
-        c_fk = allocate_fixed_k(legs_agf, budget_tl, unit_tl=unit_tl)
-        c_ma = allocate_coupon_a(legs_mod, budget_tl, unit_tl=unit_tl)
-        if all(bool(set(c_fk["selected"][j]) & legs_official[j]) for j in range(6)):
-            hit_fk += 1
-        if all(bool(set(c_ma["selected"][j]) & legs_official[j]) for j in range(6)):
-            hit_ma += 1
+        coupons = {
+            "fixed_k": allocate_fixed_k(legs_agf, budget_tl, unit_tl=u_tl),
+            "agf_a": allocate_coupon_a(legs_agf, budget_tl, unit_tl=u_tl),
+            "model_a": allocate_coupon_a(legs_mod, budget_tl, unit_tl=u_tl),
+        }
+        for key, c_res in coupons.items():
+            hit = all(bool(set(c_res["selected"][j]) & legs_official[j]) for j in range(6))
+            if hit:
+                alt_stats[key]["hit"] += 1
+            if known_u is not None:
+                alt_stats[key]["cost"] += float(c_res["cost"])
+                if hit:
+                    alt_stats[key]["ret"] += payout_val
+
+    hit_fk = alt_stats["fixed_k"]["hit"]
+    hit_aa = alt_stats["agf_a"]["hit"]
+    hit_ma = alt_stats["model_a"]["hit"]
 
     lines.extend([
         "",
-        f"## 2. Altılı Karşılaştırması (Bütçe {budget_tl:.0f} TL)",
+        f"{sec_prefix} 2. Altılı Karşılaştırması (Bütçe {budget_tl:.0f} TL)",
         "",
         f"- **Değerlendirilen Altılı:** `{n_alt}`",
         f"- **Sabit-k 6/6:** `{hit_fk} / {n_alt}`",
+        f"- **AGF — Amaç A 6/6:** `{hit_aa} / {n_alt}`",
         f"- **Model Amaç A 6/6:** `{hit_ma} / {n_alt}`",
     ])
+    if 0 < n_alt_priced < n_alt:
+        lines.append(f"- **Birim Fiyatı Bilinen Altılı:** `{n_alt_priced} / {n_alt}`")
+    lines.extend([
+        "",
+        "| Yöntem | 6/6 | Maliyet (TL) | Dönüş (TL) | ROI |",
+        "|---|---:|---:|---:|---:|",
+    ])
+    for key, label in [
+        ("fixed_k", "Sabit-k (AGF)"),
+        ("agf_a", "AGF — Amaç A"),
+        ("model_a", f"Model (`{model_version}`) — Amaç A"),
+    ]:
+        st = alt_stats[key]
+        if n_alt_priced > 0 and st["cost"] > 0:
+            cost_s = f"{st['cost']:,.2f}"
+            ret_s = f"{st['ret']:,.2f}"
+            roi_s = f"{st['ret'] / st['cost'] - 1.0:+.1%}"
+        else:
+            cost_s = ret_s = roi_s = "—"
+        lines.append(f"| {label} | {st['hit']} / {n_alt} | {cost_s} | {ret_s} | {roi_s} |")
+
+    # Evaluate 1 TL flat ganyan bet on favorite per race
+    bets_df = pd.read_sql_query("SELECT race_id, combo, payout FROM bets WHERE bet = 'GANYAN'", conn)
+    ganyan_map = {}
+    for _, brow in bets_df.iterrows():
+        pay = brow["payout"]
+        if pay is None or pd.isna(pay):
+            continue
+        c_ints = _parse_combo_ints(brow["combo"])
+        if not c_ints:
+            continue
+        race_dict = ganyan_map.setdefault(brow["race_id"], {})
+        for pno in c_ints:
+            race_dict[pno] = float(pay)
+
+    ret_agf_list = []
+    ret_mod_list = []
+    n_no_ganyan = 0
+    for rid in mod_favs.index:
+        if rid not in ganyan_map:
+            n_no_ganyan += 1
+            continue
+        p_agf_no = int(agf_favs.loc[rid, "prog_no"])
+        p_mod_no = int(mod_favs.loc[rid, "prog_no"])
+        ret_agf_list.append(ganyan_map[rid].get(p_agf_no, 0.0))
+        ret_mod_list.append(ganyan_map[rid].get(p_mod_no, 0.0))
+
+    n_ganyan = len(ret_agf_list)
+    ret_agf_arr = np.array(ret_agf_list, dtype=float)
+    ret_mod_arr = np.array(ret_mod_list, dtype=float)
+    stake_tl = float(n_ganyan)
+    tot_ret_agf = float(ret_agf_arr.sum()) if n_ganyan else 0.0
+    tot_ret_mod = float(ret_mod_arr.sum()) if n_ganyan else 0.0
+
+    if n_ganyan > 0:
+        roi_agf = tot_ret_agf / stake_tl - 1.0
+        roi_mod = tot_ret_mod / stake_tl - 1.0
+        roi_agf_s = f"{roi_agf:+.1%}"
+        roi_mod_s = f"{roi_mod:+.1%}"
+        diff_ret_s = f"**{tot_ret_mod - tot_ret_agf:+.2f}**"
+        diff_roi_s = f"**{roi_mod - roi_agf:+.1%}**"
+        _, roi_ci_lo, roi_ci_hi = paired_bootstrap_ci(ret_mod_arr - ret_agf_arr)
+        bs_roi_s = f"`[{roi_ci_lo:+.1%}, {roi_ci_hi:+.1%}]`"
+    else:
+        roi_agf_s = roi_mod_s = diff_ret_s = diff_roi_s = bs_roi_s = "—"
+
+    lines.extend([
+        "",
+        f"{sec_prefix} 3. Para (1 TL ganyan)",
+        "",
+        f"- **GANYAN satırı olmayan (hesaptan çıkarılan) koşu:** `{n_no_ganyan}`",
+        "",
+        "| Yöntem | Oynanan Koşu | Yatırılan (TL) | Dönüş (TL) | ROI |",
+        "|---|---:|---:|---:|---:|",
+        f"| Anlık AGF Favorisi | {n_ganyan} | {stake_tl:,.2f} | {tot_ret_agf:,.2f} | {roi_agf_s} |",
+        f"| Model (`{model_version}`) | {n_ganyan} | {stake_tl:,.2f} | {tot_ret_mod:,.2f} | {roi_mod_s} |",
+        f"| **Fark (Model − AGF)** | — | — | {diff_ret_s} | {diff_roi_s} |",
+        "",
+        f"- **Ganyan ROI Farkı Bootstrap %95 GA (Model − AGF, 2000 tekrar):** {bs_roi_s}",
+    ])
+    return lines, True
+
+
+def build_forward_report(conn, model_version=None, budget_tl=1000.0, unit_tl=1.25):
+    """Evaluate strictly pre-race predictions (created_at < post_time) against outcomes."""
+    versions = [model_version] if model_version is not None else _list_model_versions(conn)
+    if len(versions) == 1:
+        sec_lines, has_settled = _build_version_lines(
+            conn, versions[0], budget_tl=budget_tl, unit_tl=unit_tl, sec_prefix="##"
+        )
+        lines = ["# Ganyan — İleri Test (Forward-Test) Raporu", ""] + sec_lines
+        if has_settled:
+            lines.extend(["", f"> {ROI_NOTE}"])
+        return "\n".join(lines) + "\n"
+
+    lines = ["# Ganyan — İleri Test (Forward-Test) Raporu"]
+    any_settled = False
+    for mv in versions:
+        sec_lines, has_settled = _build_version_lines(
+            conn, mv, budget_tl=budget_tl, unit_tl=unit_tl, sec_prefix="###"
+        )
+        any_settled = any_settled or has_settled
+        lines.extend(["", f"## Model Sürümü: `{mv}`", ""] + sec_lines)
+    if any_settled:
+        lines.extend(["", f"> {ROI_NOTE}"])
     return "\n".join(lines) + "\n"
 
 
-def forward_report(db_path="data/ganyan.db", out_path="reports/FORWARD.md", model_version="v1_agf"):
+def forward_report(db_path="data/ganyan.db", out_path="reports/FORWARD.md", model_version=None):
     """Build and write forward-testing report to out_path (default: reports/FORWARD.md)."""
     conn = init_db(db_path)
     try:
@@ -146,9 +343,10 @@ def main():
     ap.add_argument("out_pos", nargs="?", help="Çıktı dosyası yolu (varsayılan: reports/FORWARD.md)")
     ap.add_argument("--db", default="data/ganyan.db")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--model-version", default=None)
     args = ap.parse_args()
     out_path = args.out or args.out_pos or "reports/FORWARD.md"
-    forward_report(db_path=args.db, out_path=out_path)
+    forward_report(db_path=args.db, out_path=out_path, model_version=args.model_version)
     print(f"Wrote forward report to {out_path}")
 
 
