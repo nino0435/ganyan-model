@@ -1,0 +1,31 @@
+name: Ganyan Kaynak Yokla
+
+# Türkiye'den BTK engelli dış veri kaynaklarını (liderform.com.tr, yenibeygir.com) GitHub Actions
+# üzerinden ölçer ve raporu + ham yanıtları artifact olarak yükler. Yalnız standart kütüphane kullanır.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kaynak-yokla:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TZ: Europe/Istanbul
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dış kaynakları yokla
+        run: python3 scripts/probe_sources.py --external
+
+      - name: Envanter ve ham örnekleri yükle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ganyan-kaynak-envanteri-dis
+          path: |
+            docs/KAYNAK_ENVANTERI_DIS.md
+            data/raw/probe/
