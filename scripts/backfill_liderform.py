@@ -212,7 +212,7 @@ def ingest_galop_page(conn, race_id, race_date, html_text, dry_run=False):
     if not dry_run and conn is not None and (horse_id_rows or workout_rows):
         if conn.in_transaction:
             conn.commit()
-        conn.execute("BEGIN")
+        conn.execute("BEGIN IMMEDIATE")  # okuyup sonra yazan işlemde eşzamanlı yazıcıyla kilit çakışmasını önler
         try:
             insert_horse_ids(conn, horse_id_rows, commit=False)
             inserted = insert_workouts(conn, workout_rows, commit=False)

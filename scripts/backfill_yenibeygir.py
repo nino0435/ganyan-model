@@ -150,7 +150,7 @@ def write_city_day_ratings(conn, parsed, date_str):
     """Write a single ``(date, city)`` page's ratings inside its own short transaction."""
     if conn.in_transaction:
         conn.commit()
-    conn.execute("BEGIN")
+    conn.execute("BEGIN IMMEDIATE")  # okuyup sonra yazan işlemde eşzamanlı yazıcıyla kilit çakışmasını önler
     try:
         stats = match_and_save_ratings(conn, parsed, date_str, commit=False, write=True)
         conn.commit()

@@ -122,7 +122,7 @@ def write_city_results(conn, parsed):
     """Atomically write races, runners (+prog_no), bets, altili, extras, and pools."""
     if conn.in_transaction:
         conn.commit()
-    conn.execute("BEGIN")
+    conn.execute("BEGIN IMMEDIATE")  # okuyup sonra yazan işlemde eşzamanlı yazıcıyla kilit çakışmasını önler
     try:
         upsert_results(_NoCommitConn(conn), parsed)
         prog_rows = [
