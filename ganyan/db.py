@@ -1,4 +1,5 @@
 """SQLite database schema and upsert helpers."""
+import datetime
 import json
 import os
 import sqlite3
@@ -95,6 +96,94 @@ CREATE TABLE IF NOT EXISTS weather_hourly (
     wind_kmh REAL,
     src TEXT,
     PRIMARY KEY(city, ts)
+);
+
+CREATE TABLE IF NOT EXISTS fetch_log (
+    source TEXT,
+    target TEXT,
+    status TEXT,
+    http INT,
+    bytes INT,
+    fetched_at TEXT,
+    PRIMARY KEY(source, target)
+);
+
+CREATE TABLE IF NOT EXISTS race_extra (
+    race_id TEXT PRIMARY KEY,
+    son800_raw TEXT,
+    son800_s REAL,
+    prize_1 REAL,
+    source TEXT
+);
+
+CREATE TABLE IF NOT EXISTS runner_extra (
+    race_id TEXT,
+    horse_key TEXT,
+    fark TEXT,
+    gec_cikis TEXT,
+    hp_result REAL,
+    tjk_at_id INT,
+    source TEXT,
+    PRIMARY KEY(race_id, horse_key)
+);
+
+CREATE TABLE IF NOT EXISTS pools (
+    date TEXT,
+    city TEXT,
+    bet TEXT,
+    amount REAL,
+    PRIMARY KEY(date, city, bet)
+);
+
+CREATE TABLE IF NOT EXISTS workouts (
+    source TEXT,
+    horse_key TEXT,
+    horse_name TEXT,
+    ext_horse_id TEXT,
+    date TEXT,
+    city TEXT,
+    kind TEXT,
+    jockey TEXT,
+    kg REAL,
+    d1600 REAL,
+    d1400 REAL,
+    d1200 REAL,
+    d1000 REAL,
+    d800 REAL,
+    d600 REAL,
+    d400 REAL,
+    d200 REAL,
+    effort TEXT,
+    going TEXT,
+    inner_outer TEXT,
+    surface TEXT,
+    PRIMARY KEY(source, horse_name, date, city, kind)
+);
+
+CREATE TABLE IF NOT EXISTS steward_notes (
+    race_id TEXT,
+    horse_name TEXT,
+    horse_key TEXT,
+    text TEXT,
+    tags TEXT,
+    PRIMARY KEY(race_id, horse_name)
+);
+
+CREATE TABLE IF NOT EXISTS ext_ratings (
+    source TEXT,
+    race_id TEXT,
+    horse_key TEXT,
+    name TEXT,
+    value REAL,
+    PRIMARY KEY(source, race_id, horse_key, name)
+);
+
+CREATE TABLE IF NOT EXISTS horse_ids (
+    source TEXT,
+    ext_id TEXT,
+    horse_key TEXT,
+    horse_name TEXT,
+    PRIMARY KEY(source, ext_id)
 );
 """
 
@@ -280,3 +369,111 @@ def upsert_program(conn, parsed):
             row,
         )
     conn.commit()
+
+
+def upsert_race_extra(conn, rows, commit=True):
+    """Upsert race_extra records into SQLite."""
+    cur = conn.cursor()
+    for r in rows or []:
+        row = {
+            "son800_raw": None,
+            "son800_s": None,
+            "prize_1": None,
+            "source": None,
+            **r,
+        }
+        cur.execute(
+            """
+            INSERT INTO race_extra (race_id, son800_raw, son800_s, prize_1, source)
+            VALUES (:race_id, :son800_raw, :son800_s, :prize_1, :source)
+            ON CONFLICT(race_id) DO UPDATE SET
+                son800_raw = COALESCE(excluded.son800_raw, race_extra.son800_raw),
+                son800_s = COALESCE(excluded.son800_s, race_extra.son800_s),
+                prize_1 = COALESCE(excluded.prize_1, race_extra.prize_1),
+                source = COALESCE(excluded.source, race_extra.source)
+            """,
+            row,
+        )
+    if commit:
+        conn.commit()
+
+
+def upsert_runner_extra(conn, rows, commit=True):
+    """Upsert runner_extra records into SQLite."""
+    cur = conn.cursor()
+    for r in rows or []:
+        row = {
+            "fark": None,
+            "gec_cikis": None,
+            "hp_result": None,
+            "tjk_at_id": None,
+            "source": None,
+            **r,
+        }
+        cur.execute(
+            """
+            INSERT INTO runner_extra (
+                race_id, horse_key, fark, gec_cikis, hp_result, tjk_at_id, source
+            )
+            VALUES (
+                :race_id, :horse_key, :fark, :gec_cikis, :hp_result, :tjk_at_id, :source
+            )
+            ON CONFLICT(race_id, horse_key) DO UPDATE SET
+                fark = COALESCE(excluded.fark, runner_extra.fark),
+                gec_cikis = COALESCE(excluded.gec_cikis, runner_extra.gec_cikis),
+                hp_result = COALESCE(excluded.hp_result, runner_extra.hp_result),
+                tjk_at_id = COALESCE(excluded.tjk_at_id, runner_extra.tjk_at_id),
+                source = COALESCE(excluded.source, runner_extra.source)
+            """,
+            row,
+        )
+    if commit:
+        conn.commit()
+
+
+def upsert_pools(conn, rows, commit=True):
+    """Upsert daily pool amounts into SQLite."""
+    cur = conn.cursor()
+    for r in rows or []:
+        cur.execute(
+            """
+            INSERT INTO pools (date, city, bet, amount)
+            VALUES (:date, :city, :bet, :amount)
+            ON CONFLICT(date, city, bet) DO UPDATE SET
+                amount = excluded.amount
+            """,
+            r,
+        )
+    if commit:
+        conn.commit()
+
+
+def log_fetch(conn, source, target, status, http=None, nbytes=None, fetched_at=None, commit=True, **kw):
+    """Insert or update a fetch_log entry."""
+    if nbytes is None and "bytes" in kw:
+        nbytes = kw["bytes"]
+    if fetched_at is None:
+        fetched_at = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO fetch_log (source, target, status, http, bytes, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, target) DO UPDATE SET
+            status = excluded.status,
+            http = excluded.http,
+            bytes = excluded.bytes,
+            fetched_at = excluded.fetched_at
+        """,
+        (source, target, status, http, nbytes, fetched_at),
+    )
+    if commit:
+        conn.commit()
+
+
+def fetched_ok(conn, source, target):
+    """Return True if (source, target) is marked status='ok' in fetch_log."""
+    row = conn.execute(
+        "SELECT status FROM fetch_log WHERE source = ? AND target = ?",
+        (source, target),
+    ).fetchone()
+    return bool(row and row[0] == "ok")
