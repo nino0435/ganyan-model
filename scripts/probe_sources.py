@@ -130,7 +130,7 @@ def parse_domestic_cities(day_html):
     seen = {}
     for m in re.finditer(r"<a\b([^>]*)>(.*?)</a>", day_html, flags=re.DOTALL | re.IGNORECASE):
         attrs, inner = m.group(1), m.group(2)
-        if "Y.G." not in clean_html_text(inner):
+        if not re.search(r"Y\.G\.|Yarış Günü", clean_html_text(inner)):  # eski sayfalar: "(28. Yarış Günü)"
             continue
         id_m = re.search(r'(?<![\w-])id=["\']([^"\']+)["\']', attrs, flags=re.IGNORECASE)
         sid_m = re.search(r'\bdata-sehir-id=["\'](\d+)["\']', attrs, flags=re.IGNORECASE)
