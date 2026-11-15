@@ -532,7 +532,7 @@ def test_run_v5_backtest_end_to_end_synthetic_db(tmp_path):
         locked=True,
     )
     assert locked_md.exists()
-    assert set(locked_res["overall_df"]["variant"]) == {"B0", "B1", "F_SGR+B"}
+    assert set(locked_res["overall_df"]["variant"]) == {"B0", "B1", "B1_SGR"}
     assert set(locked_res["yearly_df"]["year"]) == {2026}
 
     with pytest.raises(FileExistsError):
