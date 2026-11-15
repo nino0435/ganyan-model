@@ -18,10 +18,11 @@ from scripts.snapshot_agf import snapshot_agf
 
 IST_TZ = ZoneInfo("Europe/Istanbul")
 MODEL_VERSION = "v1_agf"
+LATE_MODEL_VERSION = "v1_agf_late"
 
 
 def forward_log(date_str, db_path="data/ganyan.db", prog_dir="data/raw/program", do_snapshot=True, created_at=None,
-                race_ids=None):
+                race_ids=None, model_version=MODEL_VERSION):
     """Run forward prediction logging for date_str. Does not overwrite existing predictions for the same model_version.
 
     race_ids verilirse yalnız o koşular için tahmin yazılır (gözcü: koşu başına)."""
@@ -119,7 +120,7 @@ def forward_log(date_str, db_path="data/ganyan.db", prog_dir="data/raw/program",
             (
                 r["race_id"],
                 int(r["prog_no"]),
-                MODEL_VERSION,
+                model_version,
                 created_at,
                 float(r["p_win"]),
                 float(r["agf_close"]) if pd.notna(r["agf_close"]) else None,

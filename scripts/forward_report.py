@@ -14,6 +14,8 @@ from ganyan.allocator import allocate_coupon_a, allocate_fixed_k
 from ganyan.backtest import get_unit_tl
 from ganyan.db import init_db
 
+EARLY_MODEL_VERSION = "v1_agf"
+LATE_MODEL_VERSION = "v1_agf_late"
 ROI_NOTE = (
     "ROI kapanış öncesi oranlarla değil, kesinleşmiş ödemelerle hesaplanır; "
     "küçük örneklemde tek büyük ikramiye sonucu belirler."
@@ -298,6 +300,114 @@ def _build_version_lines(conn, model_version, budget_tl=1000.0, unit_tl=1.25, se
     return lines, True
 
 
+def _settled_valid_winners(conn, model_version):
+    """Return per-race settled winner metrics for strictly pre-race, AGF-complete predictions of model_version."""
+    query = """
+    SELECT
+        p.race_id, p.prog_no, p.created_at, p.p_win, p.agf_used,
+        r.date, r.city, r.race_no, r.post_time, r.status,
+        run.finish, run.scratched
+    FROM predictions p
+    JOIN races r ON p.race_id = r.race_id
+    LEFT JOIN runners run ON p.race_id = run.race_id AND p.prog_no = run.prog_no
+    WHERE p.model_version = ?
+    ORDER BY r.date, r.city, r.race_no, p.prog_no
+    """
+    df = pd.read_sql_query(query, conn, params=(model_version,))
+    cols = ["race_id", "acc_agf", "acc_mod", "ll_agf", "ll_mod"]
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+
+    post_iso = df["date"].astype(str) + "T" + df["post_time"].fillna("00:00").astype(str)
+    valid_df = df[df["created_at"].astype(str).str[:16] < post_iso.str[:16]].copy()
+    if valid_df.empty:
+        return pd.DataFrame(columns=cols)
+
+    agf_by_race = pd.to_numeric(valid_df["agf_used"], errors="coerce").groupby(valid_df["race_id"]).apply(list)
+    bad_ids = {rid for rid, vals in agf_by_race.items() if not agf_complete(vals)}
+    valid_df = valid_df[~valid_df["race_id"].isin(bad_ids)].copy()
+
+    res_df = valid_df[(valid_df["status"] == "result") & (valid_df["scratched"].fillna(0) == 0)].copy()
+    if res_df.empty:
+        return pd.DataFrame(columns=cols)
+
+    p_win_col = pd.to_numeric(res_df["p_win"], errors="coerce").fillna(0.0)
+    p_sum = p_win_col.groupby(res_df["race_id"]).transform("sum")
+    p_cnt = res_df.groupby("race_id")["p_win"].transform("count")
+    res_df["p_norm"] = (p_win_col / p_sum.where(p_sum > 0)).fillna(1.0 / p_cnt)
+
+    agf_used = pd.to_numeric(res_df["agf_used"], errors="coerce")
+    agf_col = agf_used.where(agf_used > 0).fillna(1.0)
+    res_df["p_agf"] = agf_col / agf_col.groupby(res_df["race_id"]).transform("sum")
+
+    res_df["rk_mod"] = res_df.groupby("race_id")["p_norm"].rank(ascending=False, method="first", na_option="bottom")
+    res_df["rk_agf"] = res_df.groupby("race_id")["p_agf"].rank(ascending=False, method="first", na_option="bottom")
+
+    winners = res_df[res_df["finish"] == 1]
+    if winners.empty:
+        return pd.DataFrame(columns=cols)
+
+    return (
+        pd.DataFrame({
+            "race_id": winners["race_id"].values,
+            "acc_agf": (winners["rk_agf"] == 1).astype(float).values,
+            "acc_mod": (winners["rk_mod"] == 1).astype(float).values,
+            "ll_agf": (-np.log(winners["p_agf"].clip(lower=1e-6))).values,
+            "ll_mod": (-np.log(winners["p_norm"].clip(lower=1e-6))).values,
+        })
+        .groupby("race_id", sort=False, as_index=False)
+        .mean()
+    )
+
+
+def _build_early_late_lines(conn):
+    early = _settled_valid_winners(conn, EARLY_MODEL_VERSION)
+    late = _settled_valid_winners(conn, LATE_MODEL_VERSION)
+    common_set = set(early["race_id"]) & set(late["race_id"])
+    lines = ["## Erken ve Geç Tahmin (aynı koşular)", ""]
+    if not common_set:
+        lines.append(
+            "- **Ortak Sonuçlanmış Geçerli Koşu:** `0` "
+            "(Henüz iki sürümde de sonuçlanan ortak geçerli koşu yok.)"
+        )
+        return lines
+
+    early_c = early[early["race_id"].isin(common_set)].reset_index(drop=True)
+    late_c = late.set_index("race_id").loc[early_c["race_id"]].reset_index()
+    n_common = len(early_c)
+
+    acc_agf_e = float(early_c["acc_agf"].mean())
+    acc_mod_e = float(early_c["acc_mod"].mean())
+    ll_agf_e = float(early_c["ll_agf"].mean())
+    ll_mod_e = float(early_c["ll_mod"].mean())
+
+    acc_agf_l = float(late_c["acc_agf"].mean())
+    acc_mod_l = float(late_c["acc_mod"].mean())
+    ll_agf_l = float(late_c["ll_agf"].mean())
+    ll_mod_l = float(late_c["ll_mod"].mean())
+
+    d_acc_late = (late_c["acc_mod"] - late_c["acc_agf"]).values
+    d_ll_late = (late_c["ll_mod"] - late_c["ll_agf"]).values
+    _, acc_ci_lo, acc_ci_hi = paired_bootstrap_ci(d_acc_late)
+    _, ll_ci_lo, ll_ci_hi = paired_bootstrap_ci(d_ll_late)
+    bs_str = f"1. tercih `[{acc_ci_lo:+.1%}, {acc_ci_hi:+.1%}]`, log-loss `[{ll_ci_lo:+.4f}, {ll_ci_hi:+.4f}]`"
+
+    lines.extend([
+        f"- **Ortak Sonuçlanmış Geçerli Koşu:** `{n_common}`",
+        "",
+        "| Yöntem | Koşu | 1. Tercih Kazandı | Log-Loss |",
+        "|---|---:|---:|---:|",
+        f"| AGF (erken, `{EARLY_MODEL_VERSION}`) | {n_common} | {acc_agf_e:.1%} | {ll_agf_e:.4f} |",
+        f"| Model (erken, `{EARLY_MODEL_VERSION}`) | {n_common} | {acc_mod_e:.1%} | {ll_mod_e:.4f} |",
+        f"| AGF (geç, `{LATE_MODEL_VERSION}`) | {n_common} | {acc_agf_l:.1%} | {ll_agf_l:.4f} |",
+        f"| Model (geç, `{LATE_MODEL_VERSION}`) | {n_common} | {acc_mod_l:.1%} | {ll_mod_l:.4f} |",
+        f"| **Fark (Model_geç − AGF_geç)** | {n_common} | **{acc_mod_l - acc_agf_l:+.1%}** | **{ll_mod_l - ll_agf_l:+.4f}** |",
+        "",
+        f"- **Koşu-Eşli Bootstrap %95 GA (Model_geç − AGF_geç, 2000 tekrar):** {bs_str}",
+    ])
+    return lines
+
+
 def build_forward_report(conn, model_version=None, budget_tl=1000.0, unit_tl=1.25):
     """Evaluate strictly pre-race predictions (created_at < post_time) against outcomes."""
     versions = [model_version] if model_version is not None else _list_model_versions(conn)
@@ -318,6 +428,8 @@ def build_forward_report(conn, model_version=None, budget_tl=1000.0, unit_tl=1.2
         )
         any_settled = any_settled or has_settled
         lines.extend(["", f"## Model Sürümü: `{mv}`", ""] + sec_lines)
+    if EARLY_MODEL_VERSION in versions and LATE_MODEL_VERSION in versions:
+        lines.extend(["", *_build_early_late_lines(conn)])
     if any_settled:
         lines.extend(["", f"> {ROI_NOTE}"])
     return "\n".join(lines) + "\n"

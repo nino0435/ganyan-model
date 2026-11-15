@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ganyan.db import init_db
 from ganyan.tjk import domestic_cities
-from scripts.forward_log import MODEL_VERSION, forward_log
+from scripts.forward_log import LATE_MODEL_VERSION, MODEL_VERSION, forward_log
 from scripts.snapshot_agf import snapshot_agf
 
 IST_TZ = ZoneInfo("Europe/Istanbul")
@@ -40,6 +40,61 @@ def pending_races(conn, date_str, hm):
         """,
         (date_str, hm, MODEL_VERSION),
     ).fetchall()
+
+
+def agf_final_hm(conn, date_str, race_id):
+    """Koşunun AGF'sinin kesinleştiği başlangıç koşusunun post_time ('HH:MM') değeri; yoksa None."""
+    row = conn.execute(
+        "SELECT city, race_no FROM races WHERE race_id = ? AND date = ? AND status != 'cancelled'",
+        (race_id, date_str),
+    ).fetchone()
+    if not row or row[0] is None or row[1] is None:
+        return None
+    city, r = row[0], int(row[1])
+    if r < 1:
+        return None
+    card = conn.execute(
+        "SELECT race_no, post_time FROM races WHERE date = ? AND city = ? AND status != 'cancelled'",
+        (date_str, city),
+    ).fetchall()
+    n = len(card)
+    if n < 6:
+        return None
+    if n == 6:
+        start_no = 1
+    elif n == 7:
+        if r < 2:
+            return None
+        start_no = 2
+    elif n == 8:
+        if r <= 2:
+            return None
+        start_no = 3
+    else:
+        start_no = 1 if r <= 6 else n - 5
+    by_no = {int(no): pt for no, pt in card if no is not None}
+    pt = by_no.get(start_no)
+    return pt if pt else None
+
+
+def pending_late_races(conn, date_str, hm, late_version=LATE_MODEL_VERSION):
+    """Başlamamış (post_time > hm), iptal/sonuç olmayan, late_version tahmini olmayan ve AGF'si kesinleşmiş (<= hm) koşular."""
+    rows = conn.execute(
+        """
+        SELECT r.race_id, r.city, r.post_time FROM races r
+        WHERE r.date = ? AND r.post_time IS NOT NULL AND r.post_time > ?
+          AND r.status NOT IN ('result', 'cancelled')
+          AND NOT EXISTS (SELECT 1 FROM predictions p WHERE p.race_id = r.race_id AND p.model_version = ?)
+        ORDER BY r.post_time, r.city, r.race_no
+        """,
+        (date_str, hm, late_version),
+    ).fetchall()
+    out = []
+    for rid, city, pt in rows:
+        final_hm = agf_final_hm(conn, date_str, rid)
+        if final_hm is not None and final_hm <= hm:
+            out.append((rid, city, pt))
+    return out
 
 
 def agf_ready_ids(conn, race_ids):
@@ -102,12 +157,19 @@ def run(
     conn = init_db(db_path)
     try:
         pend = pending_races(conn, date_str, hm)
+        late_failed = False
+        try:
+            pend_late = pending_late_races(conn, date_str, hm)
+        except Exception as exc:
+            print(f"::warning::geç tahmin aday kontrolü başarısız ({date_str} {hm}): {exc}")
+            pend_late = []
+            late_failed = True
         known = {r[0] for r in conn.execute("SELECT DISTINCT city FROM races WHERE date = ?", (date_str,))}
         discover = fetch and (force_discover or not known or now.minute % DISCOVERY_MIN < DISCOVERY_SLACK)
-        if not pend and not discover:
+        if not pend and not discover and not pend_late:
             return 0
 
-        cities = {c for _, c, _ in pend}
+        cities = {c for _, c, _ in pend} | {c for _, c, _ in pend_late}
         if discover:
             cities |= set(domestic_cities(date_str, page_type="GunlukYarisProgrami"))
         if fetch and cities:
@@ -124,6 +186,30 @@ def run(
             done = [p for p in pend if p[0] in ready and p[0] not in left]
             desc = ", ".join(f"{c} {t}" for _, c, t in done)
             print(f"{date_str} {hm}: {len(done)} koşu için {written} tahmin yazıldı ({desc}); bekleyen {len(left)}")
+
+        if not late_failed:
+            try:
+                pend_late = pending_late_races(conn, date_str, hm)
+                ready_late = agf_ready_ids(conn, [p[0] for p in pend_late])
+                if ready_late:
+                    late_written = forward_log(
+                        date_str,
+                        db_path=db_path,
+                        prog_dir=prog_dir,
+                        do_snapshot=False,
+                        race_ids=ready_late,
+                        model_version=LATE_MODEL_VERSION,
+                    )
+                    if late_written:
+                        written += late_written
+                        left_late = {p[0] for p in pending_late_races(conn, date_str, hm)}
+                        done_late = [p for p in pend_late if p[0] in ready_late and p[0] not in left_late]
+                        n_done_late = len(done_late) or len(ready_late)
+                        print(
+                            f"{date_str} {hm}: KAPANIŞ-AGF'li (geç) tahmin: {n_done_late} koşu için {late_written} kayıt"
+                        )
+            except Exception as exc:
+                print(f"::warning::geç tahmin hatası ({date_str} {hm}): {exc}")
 
         missed = missed_races(conn, date_str, hm)
         if missed:
