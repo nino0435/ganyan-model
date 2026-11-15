@@ -1,0 +1,31 @@
+name: Ganyan Tahmin Yokla
+
+# Gazete/bülten tahmin kaynaklarının GitHub Actions IP'lerinden erişimini ve içerik yapısını ölçer (tek geçiş).
+# Yalnız standart kütüphane; ham yanıtlar + envanter belgesi artifact olarak yüklenir.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tahmin-yokla:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TZ: Europe/Istanbul
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Kaynakları yokla
+        run: python3 scripts/probe_tips.py
+
+      - name: Envanter ve ham örnekleri yükle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ganyan-tahmin-envanteri
+          path: |
+            docs/TAHMIN_KAYNAK_ENVANTERI.md
+            data/raw/probe_tips/
