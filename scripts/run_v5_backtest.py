@@ -20,6 +20,7 @@ from ganyan.model_v5 import (
     compute_top1_roi,
     fit_predict_fund,
     get_b1_cols,
+    get_b1x_cols,
     get_base_cols,
     to_log_prob,
 )
@@ -30,6 +31,13 @@ FUND_VARIANTS = {
     "F_G": ("G",),
     "F_R": ("R",),
     "F_SGR": ("S", "G", "R"),
+}
+
+B1X_VARIANTS = {
+    "B1_S": ("S",),
+    "B1_G": ("G",),
+    "B1_R": ("R",),
+    "B1_SGR": ("S", "G", "R"),
 }
 
 DEFAULT_VARIANTS = [
@@ -45,10 +53,18 @@ DEFAULT_VARIANTS = [
     "F_R+B",
     "F_SGR",
     "F_SGR+B",
+    "B1_S",
+    "B1_G",
+    "B1_R",
+    "B1_SGR",
+    "F0+B1",
+    "F_R+B1",
+    "F_SGR+B1",
 ]
 
 LOCKED_VARIANTS = ["B0", "B1", "F_SGR+B"]
 ALL_VALID_VARIANTS = frozenset(DEFAULT_VARIANTS)
+EDGE_TABLE_VARIANTS = ("B1", "F_SGR+B", "B1_SGR", "B1_R", "B1_S", "B1_G", "F_SGR+B1", "F_R+B1")
 LOCKED_CUTOFF = pd.Timestamp("2025-12-31")
 LOCKED_START = pd.Timestamp("2026-01-01")
 
@@ -352,15 +368,24 @@ def format_v5_report(
                     f"| `{er['bucket']}` | {int(er['bets'])} | {er['win_rate']:.2%} | "
                     f"`{er['roi']:+.2%}` | `[{er['ci95_low']:+.2%}, {er['ci95_high']:+.2%}]` |"
                 )
+        lines.append("")
+
+    if edge_tables:
         lines += [
-            "",
             "| Ek Strateji (1 TL Ganyan) | Bahis Sayısı | Kazanma % | ROI | ROI %95 GA |",
             "|---|---:|---:|---:|---:|",
         ]
-        for s_label, s_dict in [
-            (f"Yalnız `{v_name}` 1. Tercihi", tbl_info["top1_model"]),
-            ("Yalnız AGF 1. Tercihi", tbl_info["top1_agf"]),
-        ]:
+        strat_rows = [
+            (f"Yalnız `{v_name}` 1. Tercihi", tbl_info["top1_model"])
+            for v_name, tbl_info in edge_tables.items()
+        ]
+        agf_info = (
+            edge_tables["B1"]["top1_agf"]
+            if "B1" in edge_tables
+            else next(iter(edge_tables.values()))["top1_agf"]
+        )
+        strat_rows.append(("Yalnız AGF 1. Tercihi", agf_info))
+        for s_label, s_dict in strat_rows:
             if int(s_dict["bets"]) == 0:
                 lines.append(f"| {s_label} | 0 | — | — | — |")
             else:
@@ -489,6 +514,9 @@ def run_v5_backtest(
             if base_var == "B1":
                 tr = tr[tr["agf_share"].notna()]
                 cols = b1_cols
+            elif base_var in B1X_VARIANTS:
+                tr = tr[tr["agf_share"].notna()]
+                cols = get_b1x_cols(base_var, with_program=with_program)
             else:
                 blocks_needed = FUND_VARIANTS[base_var]
                 cols = list(base_cols)
@@ -503,7 +531,7 @@ def run_v5_backtest(
                 mem_base_preds[key] = None
                 return None
 
-            if base_var == "B1":
+            if base_var == "B1" or base_var in B1X_VARIANTS:
                 p_arr = fit_predict_df(tr, te_y, cols)
             else:
                 p_arr = fit_predict_fund(tr, te_y, cols)
@@ -534,93 +562,118 @@ def run_v5_backtest(
             continue
 
         for v in compute_variants:
-            if not v.endswith("+B"):
+            if v.endswith("+B1"):
+                use_b1_mkt = True
+                fund_v = v[:-3]
+            elif v.endswith("+B"):
+                use_b1_mkt = False
+                fund_v = v[:-2]
+            else:
                 p_y = get_base_year_pred(v, y)
                 if p_y is not None:
                     eval_target.loc[y_mask, f"p_{v}"] = p_y
-            else:
-                fund_v = v[:-2]
-                p_fund_y = get_base_year_pred(fund_v, y)
-                if p_fund_y is None:
-                    continue
+                continue
 
-                c_path_b = _cache_file(cache_dir, v, y)
-                if os.path.exists(c_path_b):
-                    cached_b = pd.read_pickle(c_path_b)
-                    aligned_b = _align_cached_preds(te_y, cached_b)
-                    if aligned_b is not None:
-                        eval_target.loc[y_mask, f"p_{v}"] = aligned_b
-                        if v in req_variants and {"a", "b", "fit_years", "fit_races"}.issubset(cached_b.columns):
-                            benter_rows.append(
-                                {
-                                    "variant": v,
-                                    "year": int(y),
-                                    "fit_years": str(cached_b["fit_years"].iloc[0]),
-                                    "fit_races": int(cached_b["fit_races"].iloc[0]),
-                                    "a": float(cached_b["a"].iloc[0]),
-                                    "b": float(cached_b["b"].iloc[0]),
-                                }
-                            )
-                        continue
+            p_fund_y = get_base_year_pred(fund_v, y)
+            if p_fund_y is None:
+                continue
 
-                prior_frames = []
-                used_fit_years = []
-                for py in (y - 2, y - 1):
-                    if py < first_test_year:
-                        continue
-                    p_py = get_base_year_pred(fund_v, py)
-                    if p_py is None:
-                        continue
-                    sub_py = eval_all[eval_all["_year"] == py][["race_id", "agf_share", "win"]].copy()
-                    sub_py["p_fund"] = p_py
-                    prior_frames.append(sub_py)
-                    used_fit_years.append(py)
-
-                if not prior_frames:
+            if use_b1_mkt:
+                p_b1_y = get_base_year_pred("B1", y)
+                if p_b1_y is None:
                     if v in req_variants:
                         uncombined_years.add(int(y))
                     continue
+                p_mkt_y = np.where(te_y["agf_share"].notna().to_numpy(), p_b1_y, np.nan)
+            else:
+                p_mkt_y = te_y["agf_share"].to_numpy(dtype=np.float64)
 
-                fit_df = pd.concat(prior_frames, ignore_index=True)
-                comb = BenterCombiner(clip_min=1e-6)
-                comb.fit(
-                    to_log_prob(fit_df["p_fund"].to_numpy(dtype=np.float64), 1e-6),
-                    to_log_prob(fit_df["agf_share"].to_numpy(dtype=np.float64), 1e-6),
-                    fit_df["race_id"].to_numpy(),
-                    (fit_df["win"] == 1).to_numpy(),
-                )
-                p_comb = comb.predict(
-                    to_log_prob(p_fund_y, 1e-6),
-                    to_log_prob(te_y["agf_share"].to_numpy(dtype=np.float64), 1e-6),
-                    te_y["race_id"].to_numpy(),
-                )
-                eval_target.loc[y_mask, f"p_{v}"] = p_comb
+            c_path_b = _cache_file(cache_dir, v, y)
+            if os.path.exists(c_path_b):
+                cached_b = pd.read_pickle(c_path_b)
+                aligned_b = _align_cached_preds(te_y, cached_b)
+                if aligned_b is not None:
+                    eval_target.loc[y_mask, f"p_{v}"] = aligned_b
+                    if v in req_variants and {"a", "b", "fit_years", "fit_races"}.issubset(cached_b.columns):
+                        benter_rows.append(
+                            {
+                                "variant": v,
+                                "year": int(y),
+                                "fit_years": str(cached_b["fit_years"].iloc[0]),
+                                "fit_races": int(cached_b["fit_races"].iloc[0]),
+                                "a": float(cached_b["a"].iloc[0]),
+                                "b": float(cached_b["b"].iloc[0]),
+                            }
+                        )
+                    continue
 
-                fit_years_str = ",".join(str(fy) for fy in used_fit_years)
-                fit_races_n = int(fit_df["race_id"].nunique())
-                save_b = pd.DataFrame(
+            prior_frames = []
+            used_fit_years = []
+            for py in (y - 2, y - 1):
+                if py < first_test_year:
+                    continue
+                p_py = get_base_year_pred(fund_v, py)
+                if p_py is None:
+                    continue
+                eval_py = eval_all[eval_all["_year"] == py]
+                if use_b1_mkt:
+                    p_b1_py = get_base_year_pred("B1", py)
+                    if p_b1_py is None:
+                        continue
+                    p_mkt_py = np.where(eval_py["agf_share"].notna().to_numpy(), p_b1_py, np.nan)
+                else:
+                    p_mkt_py = eval_py["agf_share"].to_numpy(dtype=np.float64)
+                sub_py = eval_py[["race_id", "win"]].copy()
+                sub_py["p_fund"] = p_py
+                sub_py["p_mkt"] = p_mkt_py
+                prior_frames.append(sub_py)
+                used_fit_years.append(py)
+
+            if not prior_frames:
+                if v in req_variants:
+                    uncombined_years.add(int(y))
+                continue
+
+            fit_df = pd.concat(prior_frames, ignore_index=True)
+            comb = BenterCombiner(clip_min=1e-6)
+            comb.fit(
+                to_log_prob(fit_df["p_fund"].to_numpy(dtype=np.float64), 1e-6),
+                to_log_prob(fit_df["p_mkt"].to_numpy(dtype=np.float64), 1e-6),
+                fit_df["race_id"].to_numpy(),
+                (fit_df["win"] == 1).to_numpy(),
+            )
+            p_comb = comb.predict(
+                to_log_prob(p_fund_y, 1e-6),
+                to_log_prob(p_mkt_y, 1e-6),
+                te_y["race_id"].to_numpy(),
+            )
+            eval_target.loc[y_mask, f"p_{v}"] = p_comb
+
+            fit_years_str = ",".join(str(fy) for fy in used_fit_years)
+            fit_races_n = int(fit_df["race_id"].nunique())
+            save_b = pd.DataFrame(
+                {
+                    "race_id": te_y["race_id"].to_numpy(),
+                    "horse_key": te_y["horse_key"].to_numpy(),
+                    "p": p_comb,
+                    "a": comb.a,
+                    "b": comb.b,
+                    "fit_years": fit_years_str,
+                    "fit_races": fit_races_n,
+                }
+            )
+            save_b.to_pickle(c_path_b)
+            if v in req_variants:
+                benter_rows.append(
                     {
-                        "race_id": te_y["race_id"].to_numpy(),
-                        "horse_key": te_y["horse_key"].to_numpy(),
-                        "p": p_comb,
-                        "a": comb.a,
-                        "b": comb.b,
+                        "variant": v,
+                        "year": int(y),
                         "fit_years": fit_years_str,
                         "fit_races": fit_races_n,
+                        "a": comb.a,
+                        "b": comb.b,
                     }
                 )
-                save_b.to_pickle(c_path_b)
-                if v in req_variants:
-                    benter_rows.append(
-                        {
-                            "variant": v,
-                            "year": int(y),
-                            "fit_years": fit_years_str,
-                            "fit_races": fit_races_n,
-                            "a": comb.a,
-                            "b": comb.b,
-                        }
-                    )
 
     winners_all = _winner_table_for_preds(eval_target, compute_variants)
 
@@ -641,9 +694,9 @@ def run_v5_backtest(
                 st["year"] = int(y)
                 yearly_rows.append(st)
 
-    # Edge-bucket ROI tables for F_SGR+B and B1
+    # Edge-bucket ROI tables for EDGE_TABLE_VARIANTS
     edge_tables = {}
-    for ev in ("F_SGR+B", "B1"):
+    for ev in EDGE_TABLE_VARIANTS:
         p_col = f"p_{ev}"
         if p_col in eval_target.columns and eval_target[p_col].notna().any():
             sub_ev = eval_target[eval_target[p_col].notna()].copy()

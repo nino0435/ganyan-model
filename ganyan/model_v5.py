@@ -12,6 +12,12 @@ _PROGRAM_SET = frozenset(PROGRAM_COLS)
 
 BASE_COLS = [c for c in get_feature_cols()[0] if c not in _PROGRAM_SET]
 BLOCK_COLS = {k: list(v) for k, v in _FEATURES_BLOCK_COLS.items()}
+B1X_VARIANTS = {
+    "B1_S": ("S",),
+    "B1_G": ("G",),
+    "B1_R": ("R",),
+    "B1_SGR": ("S", "G", "R"),
+}
 
 EDGE_BUCKET_LABELS = [
     "<0.8",
@@ -37,6 +43,16 @@ def get_b1_cols(with_program=False):
     if with_program:
         return list(raw_with_agf)
     return [c for c in raw_with_agf if c not in _PROGRAM_SET]
+
+
+def get_b1x_cols(variant, with_program=False):
+    """Return B1 feature list extended with `variant`'s v5 blocks (order-preserving, deduplicated)."""
+    if not isinstance(variant, str) or variant not in B1X_VARIANTS:
+        raise ValueError(f"Unknown B1X variant: {variant!r}. Expected one of {list(B1X_VARIANTS)}.")
+    cols = list(get_b1_cols(with_program=with_program))
+    for blk in B1X_VARIANTS[variant]:
+        cols.extend(BLOCK_COLS[blk])
+    return list(dict.fromkeys(cols))
 
 
 def fit_predict_fund(train_df, test_df, cols):

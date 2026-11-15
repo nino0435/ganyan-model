@@ -11,9 +11,11 @@ from ganyan.model_v5 import (
     PROGRAM_COLS,
     compute_edge_buckets,
     compute_top1_roi,
+    get_b1_cols,
+    get_b1x_cols,
     to_log_prob,
 )
-from scripts.run_v5_backtest import run_v5_backtest
+from scripts.run_v5_backtest import _parse_variants, run_v5_backtest
 
 
 def test_base_and_block_col_definitions():
@@ -543,3 +545,92 @@ def test_run_v5_backtest_end_to_end_synthetic_db(tmp_path):
             locked=True,
             force=False,
         )
+
+
+def test_parse_variants_ip5b():
+    assert _parse_variants("B1_SGR,F_R+B1") == ["B1_SGR", "F_R+B1"]
+    for v_ok in ("B1_S", "B1_G", "B1_R", "B1_SGR", "F0+B1", "F_R+B1", "F_SGR+B1"):
+        assert _parse_variants(v_ok) == [v_ok]
+
+    with pytest.raises(ValueError):
+        _parse_variants("B1_X")
+    with pytest.raises(ValueError):
+        _parse_variants("F_R+B2")
+
+
+def test_get_b1x_cols_definitions():
+    b1_cols = get_b1_cols(with_program=False)
+    b1_r = get_b1x_cols("B1_R", with_program=False)
+    assert b1_r == b1_cols + BLOCK_COLS["R"]
+    assert len(b1_r) == len(set(b1_r))
+
+    b1_sgr = get_b1x_cols("B1_SGR", with_program=False)
+    assert len(b1_sgr) == len(set(b1_sgr))
+    for blk in ("S", "G", "R"):
+        for col in BLOCK_COLS[blk]:
+            assert col in b1_sgr
+
+    b1_prog = get_b1_cols(with_program=True)
+    b1_r_prog = get_b1x_cols("B1_R", with_program=True)
+    assert b1_r_prog == b1_prog + BLOCK_COLS["R"]
+    assert len(b1_r_prog) == len(set(b1_r_prog))
+
+    with pytest.raises(ValueError):
+        get_b1x_cols("F_R")
+    with pytest.raises(ValueError):
+        get_b1x_cols("B1_X")
+
+
+def test_run_v5_backtest_b1x_and_b1_benter_synthetic_db(tmp_path):
+    db_path = tmp_path / "syn_v5_ip5b.db"
+    _populate_synthetic_v5_sqlite(db_path)
+
+    out_md = tmp_path / "V5_ip5b.md"
+    cache_dir = tmp_path / "v5_ip5b_cache"
+
+    res = run_v5_backtest(
+        db_path=str(db_path),
+        out_path=str(out_md),
+        start_year=2022,
+        first_test_year=2023,
+        end_date="2025-12-31",
+        variants="B0,B1,B1_R,F_R+B1",
+        cache_dir=str(cache_dir),
+    )
+
+    assert out_md.exists()
+    assert list(res["overall_df"]["variant"]) == ["B0", "B1", "B1_R", "F_R+B1"]
+
+    md = res["report_markdown"]
+    assert "`B1_R`" in md
+    assert "`F_R+B1`" in md
+    assert "### `B1_R` Kenar Kovaları" in md
+    assert "### `F_R+B1` Kenar Kovaları" in md
+    assert "Yalnız `B1_R` 1. Tercihi" in md
+    assert "Yalnız `F_R+B1` 1. Tercihi" in md
+    assert md.count("| Yalnız AGF 1. Tercihi |") == 1
+
+    benter_df = res["benter_df"]
+    fr_b1_rows = benter_df[benter_df["variant"] == "F_R+B1"]
+    assert len(fr_b1_rows) == 2
+    for _, row in fr_b1_rows.iterrows():
+        test_yr = int(row["year"])
+        fit_yrs = [int(y_s) for y_s in str(row["fit_years"]).split(",") if y_s.strip()]
+        assert len(fit_yrs) > 0
+        assert all(fy < test_yr for fy in fit_yrs)
+
+    assert (cache_dir / "pred_B1_R_2024.pkl").exists()
+    assert (cache_dir / "pred_F_R+B1_2025.pkl").exists()
+
+    # Warm-cache re-run must reproduce overall_df and benter_df identically
+    res_warm = run_v5_backtest(
+        db_path=str(db_path),
+        out_path=str(tmp_path / "V5_ip5b_warm.md"),
+        start_year=2022,
+        first_test_year=2023,
+        end_date="2025-12-31",
+        variants="B0,B1,B1_R,F_R+B1",
+        cache_dir=str(cache_dir),
+    )
+    pd.testing.assert_frame_equal(res["overall_df"], res_warm["overall_df"])
+    pd.testing.assert_frame_equal(res["benter_df"], res_warm["benter_df"])
