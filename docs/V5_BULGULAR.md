@@ -80,7 +80,21 @@ Seçim NİHAİ temettüyle yapılır (kapanış çizgisi); bahis anında yalnız
   değer `<span>` içinde) ve çağrıldığı yedek yol zaten hiç çalışmıyor → `agf_snapshots.ganyan_live` hep NULL.
 - İleri-test çalışma sıklığı seyrek (09–13 saatlik, 14:30/16:30/18:30/20:30): kapanışa yakın oran için yetmez.
 
-## 5. Sıradaki adımlar
+## 5. İleri test uyarısı: tahmin anındaki AGF, kapanış AGF'si değil (15.11.2026)
+- İleri test (`origin/actions-state:FORWARD.md`, 28.10–14.11, 264 sonuçlanmış koşu): model `v1_agf` canlı AGF favorisinin
+  gerisinde — 1. tercih −%1,5, log-loss +0,0032 (GA −0,0148…+0,0219). Tahmin, AGF'nin ilk göründüğü anda (sabah saatlik
+  çalışma) bir kez yazılıyor; kıyas da o andaki AGF ile.
+- Altılı havuzu ilk ayağın start saatinde kapanır; AGF o ana dek oluşur. Ölçüm (`agf_snapshots`, 195 koşu, ≥ 2 koşu-öncesi
+  snapshot): ilk koşu-öncesi snapshot'ın (ort. 344 dk kala) AGF log-loss'u 1,9444, son koşu-öncesi snapshot'ınki (medyan 60 dk
+  kala) 1,8334 — fark +0,1111 (SE 0,0272). Backtest'te B1'in kapanış AGF'ye göre kazancı 0,013–0,023; yani AGF'nin
+  yaşı model avantajından ~5–8 kat büyük.
+- Sonuç: backtest kazancı (kapanış AGF) ile ileri test (erken AGF) aynı şeyi ölçmüyor; ileri testin "model ≈ AGF" sonucu
+  kapanış-AGF kazancını çürütmez ve doğrulamaz. Canlıda kazanç ancak AGF kapanışa yakınken (ilk ayak start'ından sonra
+  2–6. ayaklar için, 1. ayak için start'tan hemen önce) tahmin üretilirse beklenir.
+- Öneri: ileri testte tahmini ilk ayak start'ından sonra da yaz/değerlendir (AGF yaşına göre ayrı satır); canlı oran
+  toplayıcısı (`ganyan/live_odds.py`) AGF'yi de zaman serisi olarak saklar.
+
+## 6. Sıradaki adımlar
 1. Kilitli 2026 testi (ön-kayıt kurallarıyla, tek sefer).
 2. Canlı ganyan oranı toplayıcı (ileri testten bağımsız) → kapanışa 10/5/2 dk kala oran ile nihai temettü sapması ölçülür;
    değer bahsi ancak bu ölçümle sınanabilir.
