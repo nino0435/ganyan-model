@@ -24,8 +24,8 @@
 
 ## Karar (ön-kayıt kuralı)
 H1 sağlandı → **B1_SGR, ileri teste ikinci `model_version` olarak alınmaya ADAY.** Ön koşul (kanıtlanmadan alınmaz):
-canlı özellik eşdeğerliği. Yollar: (a) yenibeygir hız + liderform galop günlük üretimi (TR'de engelli; liderform Actions
-IP'sinde de 403), (b) yalnız TJK verisiyle B1_SFA_R (kendi hız puanı + Elo; dev ΔLL −0,0034, 9/9 yıl negatif) — harici
+canlı özellik eşdeğerliği. Yollar: (a) yenibeygir hız (Actions'tan erişilebilir, HTTP 200) + liderform galop (Actions'ta Cloudflare 403 → Mac + WARP
+gerekir) günlük üretimi, (b) yalnız TJK verisiyle B1_SFA_R (kendi hız puanı + Elo; dev ΔLL −0,0034, 9/9 yıl negatif) — harici
 kaynak gerekmez ama tam geçmiş veritabanı canlı hatta taşınmalı. Bu belgeyle ileri teste alınmadı.
 
 ## Değer bahsi (açıklayıcı; ön-kayıt gereği kâr iddiası YOK)

@@ -31,8 +31,9 @@ Ham tablolar: `reports/V5.md`. Kilitli 2026 testi bu belgeden SONRA, `docs/V5_KI
   başlayınca ≈ −0,0068 (2024 −0,0046, 2025 −0,0090): bloklar çok yıllık eğitim ister.
 - Tek başına en güçlü kaynak yenibeygir hızı (−0,0037); kendi hız puanımız (`sfa_*`) onun üstüne −0,0008 ekliyor
   (B1_S − B1_YB); yenibeygirsiz kurulum (sfa + G + R) kazancın ≈ %70'ini koruyor (−0,0042 / −0,0060).
-- Canlı kurulum uyarısı: yenibeygir (TR'de engelli) ve liderform (TR + GitHub Actions IP'sinde engelli) verisi koşu
-  öncesi günlük üretilebilmeli. Yalnız TJK verisiyle (kendi hız puanı + Elo; B1_SFA_R) kurulum uzun eğitimle −0,0034
+- Canlı kurulum uyarısı: yenibeygir TR'de engelli ama GitHub Actions IP'sinden erişilebiliyor (14.11 yoklaması HTTP 200);
+  liderform hem TR'de hem Actions'ta Cloudflare 403. Yani Actions'ta kurulabilecek varyantlar yenibeygir hız içerenler
+  (B1_YB/B1_S, + Elo); B1_SGR'nin galop bloğu Mac + WARP gerektirir. Veri koşu öncesi günlük üretilebilmeli. Yalnız TJK verisiyle (kendi hız puanı + Elo; B1_SFA_R) kurulum uzun eğitimle −0,0034
   (−0,0042…−0,0026): B1_SGR kazancının ≈ %57'si ve harici kaynak gerektirmiyor (9 yılın 9'unda negatif, 6'sında tek
   başına anlamlı; 2023–25'te −0,0046…−0,0058). Kısa eğitimli (2022+) ablasyonda ≈ 0 çıkmıştı (−0,0005): uzun geçmiş
   şart; canlı hatta (Actions) kurmak için tam geçmiş veritabanı (2005→) durum olarak taşınmalı.
