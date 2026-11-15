@@ -16,6 +16,8 @@ Ham tablolar: `reports/V5.md`. Kilitli 2026 testi bu belgeden SONRA, `docs/V5_KI
 | B1 | 1,8107 | %33,89 | — |
 | B1_G | 1,8099 | %33,84 | −0,0008 (−0,0015…−0,0002) |
 | B1_R | 1,8097 | %33,87 | −0,0010 (−0,0016…−0,0003) |
+| B1_SFA (yalnız kendi hız puanı; TJK verisi) | 1,8083 | %34,01 | −0,0025 (−0,0031…−0,0018) |
+| B1_SFA_R (kendi hız + Elo; yalnız TJK verisi) | 1,8073 | %34,06 | −0,0034 (−0,0042…−0,0026) |
 | B1_YB (yalnız yenibeygir hız) | 1,8070 | %34,06 | −0,0037 (−0,0045…−0,0030) |
 | B1_S (yenibeygir + kendi hız) | 1,8062 | %34,03 | −0,0045 (−0,0053…−0,0037) |
 | B1_SFA_GR (yenibeygirsiz) | 1,8065 | %33,96 | −0,0042 (−0,0051…−0,0034) |
@@ -30,8 +32,10 @@ Ham tablolar: `reports/V5.md`. Kilitli 2026 testi bu belgeden SONRA, `docs/V5_KI
 - Tek başına en güçlü kaynak yenibeygir hızı (−0,0037); kendi hız puanımız (`sfa_*`) onun üstüne −0,0008 ekliyor
   (B1_S − B1_YB); yenibeygirsiz kurulum (sfa + G + R) kazancın ≈ %70'ini koruyor (−0,0042 / −0,0060).
 - Canlı kurulum uyarısı: yenibeygir (TR'de engelli) ve liderform (TR + GitHub Actions IP'sinde engelli) verisi koşu
-  öncesi günlük üretilebilmeli. Yalnız TJK verisiyle (kendi hız + Elo) kurulum: kısa eğitimli (2022+) ablasyonda ≈ 0
-  çıkmıştı (−0,0005); uzun eğitimle ölçümü ayrıca yapılıyor (aşağıdaki "Ek ölçüm" bölümüne yazılacak).
+  öncesi günlük üretilebilmeli. Yalnız TJK verisiyle (kendi hız puanı + Elo; B1_SFA_R) kurulum uzun eğitimle −0,0034
+  (−0,0042…−0,0026): B1_SGR kazancının ≈ %57'si ve harici kaynak gerektirmiyor (9 yılın 9'unda negatif, 6'sında tek
+  başına anlamlı; 2023–25'te −0,0046…−0,0058). Kısa eğitimli (2022+) ablasyonda ≈ 0 çıkmıştı (−0,0005): uzun geçmiş
+  şart; canlı hatta (Actions) kurmak için tam geçmiş veritabanı (2005→) durum olarak taşınmalı.
 
 ## 3. Değer bahsi (1 TL, EV_hat = p_model × nihai ganyan temettüsü)
 Seçim NİHAİ temettüyle yapılır (kapanış çizgisi); bahis anında yalnız canlı oran bilinir (bkz. §4).
