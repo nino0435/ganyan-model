@@ -1,0 +1,35 @@
+name: Ganyan Canli Yokla
+
+# Canlı oran toplayıcısının GitHub Actions IP'lerinden TJK program sayfasına erişip erişemediğini ölçer (tek geçiş).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canli-yokla:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TZ: Europe/Istanbul
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install -r requirements.txt
+      - name: Toplayıcıyı tek geçiş çalıştır
+        run: python scripts/live_odds_collect.py --once --window-min 1000 --db /tmp/live_probe.db
+      - name: Sonuç özeti
+        run: |
+          python - <<'PY'
+          import sqlite3
+          c = sqlite3.connect("/tmp/live_probe.db")
+          print("satir:", c.execute("select count(*) from live_odds").fetchone())
+          print("canli_oranli:", c.execute("select count(*) from live_odds where ganyan_live is not null and ganyan_live<999").fetchone())
+          print("agf_dolu:", c.execute("select count(*) from live_odds where agf_pct is not null").fetchone())
+          for r in c.execute("select race_id,prog_no,ganyan_live,agf_pct,minutes_to_post from live_odds order by random() limit 5"):
+              print(r)
+          PY
