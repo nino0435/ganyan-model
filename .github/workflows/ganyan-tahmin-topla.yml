@@ -1,0 +1,78 @@
+name: Ganyan Tahmin Topla
+
+# Gazete/bülten tahminlerini (Sporx hazır kuponlar + Milliyet "Altılı ganyanda bugün" resmi + hipodrom.com yazar kuponları/yorumları) günde birkaç kez toplar.
+# Çıktı ÖZEL repodaki `tahmin-veri` dalına gider (telifli içerik açık repoya konmaz). Yalnız standart kütüphane.
+# Saatlik, TR 07:30-17:30 (UTC 04:30-14:30; ~11 dk/gün). Milliyet ~07:00'de yayınlıyor, Sporx 10:30-12:30'da güncelliyor,
+# hipodrom.com yazarları kuponlarını gün içinde ekliyor/değiştiriyor.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 4-14 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tahmin-topla
+  cancel-in-progress: false
+
+env:
+  TZ: Europe/Istanbul
+  PYTHONUTF8: "1"
+
+jobs:
+  topla:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Kod (main)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Veri dalı
+        uses: actions/checkout@v4
+        with:
+          ref: tahmin-veri
+          path: tips_data
+
+      - name: Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Tahminleri topla
+        shell: bash
+        run: |
+          set +e
+          python3 scripts/tips_collect.py --out-dir tips_data --once
+          echo "sporx çıkış: $?"
+          python3 scripts/milliyet_collect.py --out-dir tips_data
+          echo "milliyet çıkış: $?"
+          python3 scripts/hipodrom_collect.py --out-dir tips_data
+          echo "hipodrom çıkış: $?"
+          exit 0
+
+      - name: Veri dalına yaz
+        shell: bash
+        run: |
+          set +e
+          git -C tips_data config user.name "github-actions[bot]"
+          git -C tips_data config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -z "$(git -C tips_data status --porcelain)" ]; then
+            echo "değişiklik yok"
+            exit 0
+          fi
+          git -C tips_data add -A
+          git -C tips_data commit -m "tahmin $(date '+%Y-%m-%d %H:%M:%S')" || exit 0
+          for attempt in 1 2 3; do
+            if git -C tips_data push origin HEAD:tahmin-veri; then
+              echo "push tamam"
+              exit 0
+            fi
+            echo "push denemesi ${attempt}/3 başarısız"
+            git -C tips_data pull --rebase origin tahmin-veri || git -C tips_data rebase --abort
+            sleep 3
+          done
+          echo "UYARI: tahmin-veri dalına push başarısız"
+          exit 1
