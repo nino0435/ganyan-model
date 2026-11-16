@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import pickle
 import pprint
 import numpy as np
 import pandas as pd
@@ -590,6 +591,22 @@ V6_CONFIG = {'calibrated_from': 'E3',
  'variant': 'E5_best_temp'}
 # --- V6_CONFIG_END ---
 
+V6_LIVE_MODEL_VERSION = "v6_e5"
+
+# Walk-forward temperature calibration gamma (= 1/T) per calendar year from reports/V6.md (E5_best_temp)
+V6_YEARLY_GAMMA = {
+    2017: 0.9794,
+    2018: 0.9844,
+    2019: 0.9915,
+    2020: 0.9932,
+    2021: 1.0030,
+    2022: 1.0139,
+    2023: 1.0278,
+    2024: 1.0331,
+    2025: 1.0336,
+    2026: 1.0307,
+}
+
 
 def _normalize_history_start(val):
     if isinstance(val, (int, np.integer)):
@@ -1165,6 +1182,202 @@ def compute_ev_bet_stats(df, p_col, thresholds=(1.2, 1.35, 1.5), top_n_exclude=1
     return pd.DataFrame(rows)
 
 
+def get_v6_gamma(year, warn_fn=None, gamma_table=None):
+    """Return walk-forward temperature `gamma` for calendar `year` from `V6_YEARLY_GAMMA`.
+
+    If `year` is absent from the table, falls back to the latest year in the table and emits a warning.
+    """
+    tbl = V6_YEARLY_GAMMA if gamma_table is None else gamma_table
+    if not tbl:
+        raise ValueError("V6_YEARLY_GAMMA tablosu boş olamaz.")
+    y_int = int(year)
+    if y_int in tbl:
+        return float(tbl[y_int])
+    last_year = max(int(k) for k in tbl)
+    gamma_val = float(tbl[last_year])
+    msg = (
+        f"UYARI: V6 sıcaklık (gamma) tablosunda {y_int} yılı bulunamadı; "
+        f"en son yıl ({last_year}) gamma={gamma_val:.4f} kullanılıyor (yeniden kalibrasyon önerilir)."
+    )
+    if warn_fn is not None:
+        warn_fn(msg)
+    else:
+        print(msg, flush=True)
+    return gamma_val
+
+
+def build_v6_cache_key(date_str, train_start, config=None):
+    """Build deterministic daily cache key `(date, train_start, config_digest)` for trained V6 HGB bundle."""
+    cfg = V6_CONFIG if config is None else config
+    if cfg is None:
+        raise ValueError("V6_CONFIG tanımlı değil (None).")
+    return {
+        "date": str(date_str)[:10],
+        "train_start": str(train_start),
+        "config_digest": config_digest(cfg),
+    }
+
+
+def _load_v6_bundle_cache(cache_path, expected_key):
+    p_str = str(cache_path)
+    if not os.path.exists(p_str):
+        return None
+    try:
+        with open(p_str, "rb") as f:
+            payload = pickle.load(f)
+        if isinstance(payload, dict) and payload.get("cache_key") == expected_key:
+            bundle = payload.get("bundle")
+            if isinstance(bundle, dict) and bundle.get("estimators"):
+                return bundle
+    except Exception:
+        return None
+    return None
+
+
+def _save_v6_bundle_cache(payload, cache_path):
+    p_str = str(cache_path)
+    parent = os.path.dirname(p_str)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp_p = f"{p_str}.tmp.{os.getpid()}"
+    with open(tmp_p, "wb") as f:
+        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+    os.replace(tmp_p, p_str)
+
+
+def fit_v6_model_bundle(train_df, config=None):
+    """Fit multi-seed HGB estimators specified by `config` (defaults to `V6_CONFIG`) on `train_df`."""
+    cfg = V6_CONFIG if config is None else config
+    if cfg is None:
+        raise ValueError("V6_CONFIG tanımlı değil (None).")
+
+    feats = list(cfg["feature_cols"])
+    seeds = tuple(int(s) for s in cfg["seeds"])
+    if not seeds:
+        raise ValueError("En az bir tohum (seed) gerekli.")
+
+    eff_params = dict(DEFAULT_HGB_PARAMS)
+    if cfg.get("hgb_params"):
+        eff_params.update(cfg["hgb_params"])
+
+    temporal_val_frac = cfg.get("temporal_val_frac")
+    if temporal_val_frac is not None and 0.0 < float(temporal_val_frac) < 0.5:
+        eff_params["max_iter"] = _select_best_iter_temporal(
+            train_df,
+            feats,
+            eff_params,
+            val_frac=float(temporal_val_frac),
+            random_state=seeds[0],
+        )
+        eff_params["early_stopping"] = False
+
+    y_train = (train_df["finish"] == 1).astype(int)
+    X_train = train_df[feats].copy()
+    all_nan = [c for c in feats if X_train[c].isna().all()]
+    if all_nan:
+        X_train[all_nan] = 0.0
+
+    estimators = []
+    for s in seeds:
+        est = make_v6_estimator(eff_params, random_state=s)
+        est.fit(X_train, y_train)
+        estimators.append(est)
+
+    return {
+        "estimators": estimators,
+        "feature_cols": feats,
+        "all_nan_cols": all_nan,
+        "seeds": list(seeds),
+        "config_digest": config_digest(cfg),
+    }
+
+
+def predict_v6_model_bundle(bundle, today_df, gamma=None, year=None, warn_fn=None):
+    """Predict race-normalized, temperature-calibrated `p_win` on `today_df` from a fitted V6 bundle."""
+    if len(today_df) == 0:
+        return np.zeros(0, dtype=np.float64)
+
+    feats = list(bundle["feature_cols"])
+    X_test = today_df[feats].copy()
+    all_nan = list(bundle.get("all_nan_cols") or ())
+    if all_nan:
+        X_test[all_nan] = 0.0
+
+    estimators = bundle["estimators"]
+    raw_sum = np.zeros(len(today_df), dtype=np.float64)
+    for est in estimators:
+        raw_sum += est.predict_proba(X_test)[:, 1]
+    avg_raw = raw_sum / float(len(estimators))
+
+    rids = today_df["race_id"].to_numpy()
+    p_base = race_normalize_probs(avg_raw, rids)
+
+    if gamma is not None:
+        eff_gamma = float(gamma)
+    else:
+        if year is not None:
+            eff_year = int(year)
+        elif "date" in today_df.columns:
+            eff_year = int(pd.Timestamp(today_df["date"].iloc[0]).year)
+        else:
+            eff_year = int(str(today_df["race_id"].iloc[0])[:4])
+        eff_gamma = get_v6_gamma(eff_year, warn_fn=warn_fn)
+
+    if eff_gamma == 1.0:
+        return p_base
+
+    cal = RaceTemperatureCalibrator(clip_min=1e-6)
+    cal.gamma = eff_gamma
+    cal.temperature = float(1.0 / eff_gamma)
+    return cal.predict(p_base, rids)
+
+
+def fit_predict_v6_live(
+    train_df,
+    today_df,
+    config=None,
+    gamma=None,
+    year=None,
+    cache_path=None,
+    cache_meta=None,
+    warn_fn=None,
+):
+    """Core live/backcheck V6 predictor: `train_df` + `today_df` -> 5-seed normalized + `gamma`-calibrated `p_win`.
+
+    When `cache_path` is provided, loads/saves the fitted 5-HGB bundle keyed by
+    `(date, train_start, config_digest)` and retrains automatically on any key mismatch.
+    """
+    cfg = V6_CONFIG if config is None else config
+    if cfg is None:
+        raise ValueError("V6_CONFIG tanımlı değil (None).")
+    if len(today_df) == 0:
+        return np.zeros(0, dtype=np.float64)
+
+    bundle = None
+    if cache_path is not None:
+        meta = dict(cache_meta or {})
+        date_val = meta.get("date")
+        if not date_val:
+            if "date" in today_df.columns:
+                date_val = pd.Timestamp(today_df["date"].iloc[0]).strftime("%Y-%m-%d")
+            else:
+                date_val = str(today_df["race_id"].iloc[0])[:10]
+        train_start_val = meta.get("train_start", f"{int(cfg['train_start_year']):04d}-01-01")
+        expected_key = build_v6_cache_key(date_val, train_start_val, config=cfg)
+        bundle = _load_v6_bundle_cache(cache_path, expected_key)
+        if bundle is None:
+            bundle = fit_v6_model_bundle(train_df, config=cfg)
+            try:
+                _save_v6_bundle_cache({"cache_key": expected_key, "bundle": bundle}, cache_path)
+            except OSError as exc:
+                if warn_fn is not None:
+                    warn_fn(f"UYARI: V6 model önbelleği yazılamadı ({cache_path}): {exc}")
+    else:
+        bundle = fit_v6_model_bundle(train_df, config=cfg)
+
+    return predict_v6_model_bundle(bundle, today_df, gamma=gamma, year=year, warn_fn=warn_fn)
+
+
 __all__ = [
     "CANDIDATE_VARIANTS",
     "DEFAULT_HGB_PARAMS",
@@ -1180,10 +1393,13 @@ __all__ = [
     "STAGE_C_YEARS",
     "V5_DB_HISTORY_START",
     "V6_CONFIG",
+    "V6_LIVE_MODEL_VERSION",
+    "V6_YEARLY_GAMMA",
     "VARIANT_SPECS",
     "IsotonicRaceCalibrator",
     "RaceTemperatureCalibrator",
     "bootstrap_mean_ci",
+    "build_v6_cache_key",
     "compute_edge_buckets",
     "compute_ev_bet_stats",
     "compute_top1_roi",
@@ -1191,9 +1407,13 @@ __all__ = [
     "config_digest",
     "evaluate_stage_b_gate",
     "fit_predict_v6",
+    "fit_predict_v6_live",
+    "fit_v6_model_bundle",
     "get_v6_cols",
+    "get_v6_gamma",
     "make_v6_estimator",
     "pin_v6_config_in_source",
+    "predict_v6_model_bundle",
     "race_normalize_probs",
     "resolve_variant_config",
 ]

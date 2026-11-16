@@ -12,8 +12,9 @@ import pytest
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
-from ganyan.db import init_db, upsert_program
-from scripts import daily_v5_update, forward_v5
+from ganyan import model_v6
+from ganyan.db import init_db, upsert_program, upsert_results
+from scripts import daily_v5_update, forward_v5, forward_v5_report
 
 IST_TZ = ZoneInfo("Europe/Istanbul")
 
@@ -239,6 +240,7 @@ def test_run_once_end_to_end_synthetic_db(tmp_path, monkeypatch):
     finally:
         conn.close()
 
+    cache_dir = tmp_path / "forward_models"
     snap_calls = []
     monkeypatch.setattr(
         forward_v5,
@@ -246,7 +248,7 @@ def test_run_once_end_to_end_synthetic_db(tmp_path, monkeypatch):
         lambda ds, db_path=None, prog_dir=None, cities=None: snap_calls.append((ds, list(cities or []))) or 0,
     )
 
-    # 1) At 13:55 (mtp=5.0 for race 1, mtp=35.0 for race 2): only race 1 is predicted
+    # 1) At 13:55 (mtp=5.0 for race 1, mtp=35.0 for race 2): race 1 is predicted for BOTH v5_sgr_all & v6_e5
     written_1 = forward_v5.run_once(
         now="2026-04-20T13:55:00+03:00",
         date_str=target_date,
@@ -254,9 +256,11 @@ def test_run_once_end_to_end_synthetic_db(tmp_path, monkeypatch):
         out_db=str(out_db),
         train_start="2015-01-01",
         due_max_min=8.0,
+        cache_dir=str(cache_dir),
     )
-    assert written_1 == 6
+    assert written_1 == 12
     assert snap_calls == [(target_date, ["Ankara"])]
+    assert (cache_dir / f"{target_date}_v6_e5.pkl").exists()
 
     # Main DB predictions table must remain completely untouched
     mconn = sqlite3.connect(str(main_db))
@@ -273,22 +277,25 @@ def test_run_once_end_to_end_synthetic_db(tmp_path, monkeypatch):
             SELECT race_id, prog_no, model_version, created_at, minutes_to_post,
                    p_win, agf_used, s_cov, g_cov
             FROM predictions_v5
-            ORDER BY prog_no
+            ORDER BY model_version, prog_no
             """
         ).fetchall()
-        assert len(rows) == 6
-        assert [r[0] for r in rows] == [rid_due] * 6
-        assert [r[1] for r in rows] == [1, 2, 3, 4, 5, 6]
-        assert {r[2] for r in rows} == {"v5_sgr_all"}
-        assert {r[3] for r in rows} == {"2026-04-20T13:55:00+03:00"}
-        assert all(r[4] == pytest.approx(5.0) for r in rows)
-        p_vals = [r[5] for r in rows]
-        assert all(0.0 < p < 1.0 for p in p_vals)
-        assert sum(p_vals) == pytest.approx(1.0)
-        assert [r[6] for r in rows] == pytest.approx(agf_snap_vals)
-        # All 6 horses ran on 2026-04-15 (Yenibeygir hiz) and had 2026-04-05 Liderform workouts
-        assert all(r[7] == pytest.approx(1.0) for r in rows)
-        assert all(r[8] == pytest.approx(1.0) for r in rows)
+        assert len(rows) == 12
+        assert {r[2] for r in rows} == {"v5_sgr_all", "v6_e5"}
+        for mv in ("v5_sgr_all", "v6_e5"):
+            mv_rows = [r for r in rows if r[2] == mv]
+            assert len(mv_rows) == 6
+            assert [r[0] for r in mv_rows] == [rid_due] * 6
+            assert [r[1] for r in mv_rows] == [1, 2, 3, 4, 5, 6]
+            assert {r[3] for r in mv_rows} == {"2026-04-20T13:55:00+03:00"}
+            assert all(r[4] == pytest.approx(5.0) for r in mv_rows)
+            p_vals = [r[5] for r in mv_rows]
+            assert all(0.0 < p < 1.0 for p in p_vals)
+            assert sum(p_vals) == pytest.approx(1.0)
+            assert [r[6] for r in mv_rows] == pytest.approx(agf_snap_vals)
+            # All 6 horses ran on 2026-04-15 (Yenibeygir hiz) and had 2026-04-05 Liderform workouts
+            assert all(r[7] == pytest.approx(1.0) for r in mv_rows)
+            assert all(r[8] == pytest.approx(1.0) for r in mv_rows)
     finally:
         oconn.close()
 
@@ -300,11 +307,12 @@ def test_run_once_end_to_end_synthetic_db(tmp_path, monkeypatch):
         out_db=str(out_db),
         train_start="2015-01-01",
         due_max_min=8.0,
+        cache_dir=str(cache_dir),
     )
     assert written_2 == 0
     assert len(snap_calls) == 1
 
-    # 3) At 14:24 (mtp=6.0 for race 2): race 2 enters due window and gets predicted
+    # 3) At 14:24 (mtp=6.0 for race 2): race 2 enters due window and gets predicted for both models
     written_3 = forward_v5.run_once(
         now="2026-04-20T14:24:00+03:00",
         date_str=target_date,
@@ -312,14 +320,15 @@ def test_run_once_end_to_end_synthetic_db(tmp_path, monkeypatch):
         out_db=str(out_db),
         train_start="2015-01-01",
         due_max_min=8.0,
+        cache_dir=str(cache_dir),
     )
-    assert written_3 == 6
+    assert written_3 == 12
     assert len(snap_calls) == 2
 
     oconn = sqlite3.connect(str(out_db))
     try:
         total_cnt = oconn.execute("SELECT COUNT(*) FROM predictions_v5").fetchone()[0]
-        assert total_cnt == 12
+        assert total_cnt == 24
     finally:
         oconn.close()
 
@@ -374,3 +383,361 @@ def test_daily_v5_update_fail_soft_and_scheduled_liderform_targets(tmp_path, mon
     assert "tjk güncellendi" in out_txt
     assert "UYARI: yenibeygir güncellenemedi" in out_txt
     assert "UYARI: liderform güncellenemedi" in out_txt
+
+
+def _setup_three_due_races_db(main_db, target_date="2026-04-20"):
+    _populate_synthetic_v5_sqlite(main_db)
+    agf_vals = [30.0, 22.0, 18.0, 14.0, 10.0, 6.0]
+    conn = init_db(main_db)
+    try:
+        upsert_program(
+            conn,
+            {
+                "races": [
+                    {
+                        "race_id": f"{target_date}_Ankara_1",
+                        "date": target_date,
+                        "city": "Ankara",
+                        "race_no": 1,
+                        "post_time": "14:00",
+                        "yg_no": 1,
+                        "cls": "ŞARTLI",
+                        "breed": "Ingiliz",
+                        "distance": 1400,
+                        "surface": "Çim",
+                        "status": "scheduled",
+                    },
+                    {
+                        "race_id": f"{target_date}_Ankara_2",
+                        "date": target_date,
+                        "city": "Ankara",
+                        "race_no": 2,
+                        "post_time": "14:30",
+                        "yg_no": 2,
+                        "cls": "ŞARTLI",
+                        "breed": "Ingiliz",
+                        "distance": 1400,
+                        "surface": "Çim",
+                        "status": "scheduled",
+                    },
+                    {
+                        "race_id": f"{target_date}_Ankara_3",
+                        "date": target_date,
+                        "city": "Ankara",
+                        "race_no": 3,
+                        "post_time": "15:00",
+                        "yg_no": 3,
+                        "cls": "ŞARTLI",
+                        "breed": "Ingiliz",
+                        "distance": 1400,
+                        "surface": "Çim",
+                        "status": "scheduled",
+                    },
+                ],
+                "runners": (
+                    _make_prog_runners(f"{target_date}_Ankara_1", range(0, 6), agf_list=agf_vals)
+                    + _make_prog_runners(f"{target_date}_Ankara_2", range(6, 12), agf_list=agf_vals)
+                    + _make_prog_runners(f"{target_date}_Ankara_3", range(0, 6), agf_list=agf_vals)
+                ),
+            },
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_run_once_partial_recovery_and_error_isolation(tmp_path, monkeypatch, capsys):
+    target_date = "2026-04-20"
+    main_db = tmp_path / "ganyan_iso.db"
+    _setup_three_due_races_db(main_db, target_date=target_date)
+    cache_dir = tmp_path / "cache_iso"
+
+    # (a) Partial recovery: if only v5_sgr_all was written earlier, next dual pass writes ONLY v6_e5
+    out_partial = tmp_path / "partial.db"
+    w_v5_only = forward_v5.run_once(
+        now="2026-04-20T13:55:00+03:00",
+        date_str=target_date,
+        main_db=str(main_db),
+        out_db=str(out_partial),
+        do_snapshot=False,
+        models="v5_sgr_all",
+        cache_dir=str(cache_dir),
+    )
+    assert w_v5_only == 6
+
+    w_backfill_v6 = forward_v5.run_once(
+        now="2026-04-20T13:56:00+03:00",
+        date_str=target_date,
+        main_db=str(main_db),
+        out_db=str(out_partial),
+        do_snapshot=False,
+        cache_dir=str(cache_dir),
+    )
+    assert w_backfill_v6 == 6
+
+    pconn = sqlite3.connect(str(out_partial))
+    try:
+        counts = dict(
+            pconn.execute(
+                "SELECT model_version, COUNT(*) FROM predictions_v5 GROUP BY model_version"
+            ).fetchall()
+        )
+        assert counts == {"v5_sgr_all": 6, "v6_e5": 6}
+    finally:
+        pconn.close()
+
+    # (b) V6 error must not block v5_sgr_all
+    out_v6_err = tmp_path / "v6_err.db"
+    orig_v6_live = forward_v5.fit_predict_v6_live
+    monkeypatch.setattr(
+        forward_v5,
+        "fit_predict_v6_live",
+        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("sentetik v6 hatası")),
+    )
+    _ = capsys.readouterr()
+    w_when_v6_fails = forward_v5.run_once(
+        now="2026-04-20T13:55:00+03:00",
+        date_str=target_date,
+        main_db=str(main_db),
+        out_db=str(out_v6_err),
+        do_snapshot=False,
+        cache_dir=str(cache_dir),
+    )
+    assert w_when_v6_fails == 6
+    assert "HATA (v6_e5)" in capsys.readouterr().out
+    monkeypatch.setattr(forward_v5, "fit_predict_v6_live", orig_v6_live)
+
+    # (c) v5 error must not block v6_e5
+    out_v5_err = tmp_path / "v5_err.db"
+    monkeypatch.setattr(
+        forward_v5,
+        "fit_predict_df",
+        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("sentetik v5 hatası")),
+    )
+    _ = capsys.readouterr()
+    w_when_v5_fails = forward_v5.run_once(
+        now="2026-04-20T13:55:00+03:00",
+        date_str=target_date,
+        main_db=str(main_db),
+        out_db=str(out_v5_err),
+        do_snapshot=False,
+        cache_dir=str(cache_dir),
+    )
+    assert w_when_v5_fails == 6
+    assert "HATA (v5_sgr_all)" in capsys.readouterr().out
+    econn = sqlite3.connect(str(out_v5_err))
+    try:
+        mvs = {r[0] for r in econn.execute("SELECT DISTINCT model_version FROM predictions_v5").fetchall()}
+        assert mvs == {"v6_e5"}
+    finally:
+        econn.close()
+
+
+def test_run_once_v6_daily_cache_reuse_and_key_change_retrain(tmp_path, monkeypatch):
+    target_date = "2026-04-20"
+    main_db = tmp_path / "ganyan_cache.db"
+    out_db = tmp_path / "out_cache.db"
+    cache_dir = tmp_path / "models_cache"
+    _setup_three_due_races_db(main_db, target_date=target_date)
+
+    fit_calls = []
+    real_fit_bundle = model_v6.fit_v6_model_bundle
+
+    def _spy_fit(train_df, config=None):
+        fit_calls.append(len(train_df))
+        return real_fit_bundle(train_df, config=config)
+
+    monkeypatch.setattr(model_v6, "fit_v6_model_bundle", _spy_fit)
+
+    # Race 1 at 13:55 -> trains V6 once and writes <date>_v6_e5.pkl
+    w1 = forward_v5.run_once(
+        now="2026-04-20T13:55:00+03:00",
+        date_str=target_date,
+        main_db=str(main_db),
+        out_db=str(out_db),
+        train_start="2015-01-01",
+        do_snapshot=False,
+        cache_dir=str(cache_dir),
+    )
+    assert w1 == 12
+    assert len(fit_calls) == 1
+
+    # Race 2 at 14:24 (same day, same train_start & V6_CONFIG) -> loads cache without retraining
+    w2 = forward_v5.run_once(
+        now="2026-04-20T14:24:00+03:00",
+        date_str=target_date,
+        main_db=str(main_db),
+        out_db=str(out_db),
+        train_start="2015-01-01",
+        do_snapshot=False,
+        cache_dir=str(cache_dir),
+    )
+    assert w2 == 12
+    assert len(fit_calls) == 1
+
+    # Race 3 at 14:54 with altered train_start -> cache key changes -> retrains
+    w3 = forward_v5.run_once(
+        now="2026-04-20T14:54:00+03:00",
+        date_str=target_date,
+        main_db=str(main_db),
+        out_db=str(out_db),
+        train_start="2022-01-01",
+        do_snapshot=False,
+        cache_dir=str(cache_dir),
+    )
+    assert w3 == 12
+    assert len(fit_calls) == 2
+
+
+def test_v6_history_start_excludes_pre_2006_03_04_rows(tmp_path):
+    main_db = tmp_path / "ganyan_2005.db"
+    _populate_synthetic_v5_sqlite(main_db)
+
+    # Inject a 2005-06-01 settled race (before V6_CONFIG['history_start'] == '2006-03-04')
+    conn = init_db(main_db)
+    try:
+        rid_old = "2005-06-01_Ankara_1"
+        old_runners = [
+            {
+                "race_id": rid_old,
+                "prog_no": i + 1,
+                "horse_key": f"SIRE_{i}|DAM_{i}|2018",
+                "name": f"AT {i}",
+                "name_raw": f"AT {i}",
+                "age": 3,
+                "sex": "e",
+                "sire": f"SIRE_{i}",
+                "dam": f"DAM_{i}",
+                "weight": 57.0,
+                "jockey": "J_0",
+                "owner": "O_0",
+                "trainer": "T_0",
+                "gate": i + 1,
+                "hp": 55.0,
+                "finish": i + 1,
+                "time_s": 86.0 + 0.2 * i,
+                "ganyan": 3.0 + i,
+                "agf_close": None,
+                "agf_close_rank": None,
+                "scratched": 0,
+            }
+            for i in range(4)
+        ]
+        upsert_results(
+            conn,
+            {
+                "races": [
+                    {
+                        "race_id": rid_old,
+                        "date": "2005-06-01",
+                        "city": "Ankara",
+                        "race_no": 1,
+                        "post_time": "14:00",
+                        "yg_no": 1,
+                        "cls": "ŞARTLI",
+                        "breed": "Ingiliz",
+                        "distance": 1400,
+                        "surface": "Çim",
+                        "status": "result",
+                    }
+                ],
+                "runners": old_runners,
+                "bets": [],
+                "altili": [],
+            },
+        )
+        conn.commit()
+
+        df = forward_v5._load_runners_with_today(conn, "2026-04-15", overlay_snapshots=False)
+        tables = forward_v5._filter_v5_tables_pre_day(forward_v5.load_v5_tables(conn), df, "2026-04-15")
+    finally:
+        conn.close()
+
+    assert (df["date"] == "2005-06-01").any()
+    df_v6, _tables_v6, can_share = forward_v5._prepare_v6_inputs(
+        df, tables, "2026-04-15", model_v6.V6_CONFIG
+    )
+    assert can_share is False
+    assert not (df_v6["date"] < "2006-03-04").any()
+
+
+def test_backcheck_cli_and_report_integration(tmp_path, capsys):
+    main_db = tmp_path / "ganyan_bc.db"
+    _populate_synthetic_v5_sqlite(main_db)
+
+    # Make race 2 on 2026-04-15 a 5-horse race (scratch 6th horse) + add 1 unfinished scheduled race 3
+    conn = init_db(main_db)
+    try:
+        conn.execute(
+            "UPDATE runners SET scratched = 1 WHERE race_id = '2026-04-15_Ankara_2' AND prog_no = 6"
+        )
+        upsert_program(
+            conn,
+            {
+                "races": [
+                    {
+                        "race_id": "2026-04-15_Ankara_3",
+                        "date": "2026-04-15",
+                        "city": "Ankara",
+                        "race_no": 3,
+                        "post_time": "16:30",
+                        "yg_no": 3,
+                        "cls": "MAIDEN",
+                        "breed": "Ingiliz",
+                        "distance": 1200,
+                        "surface": "Kum",
+                        "status": "scheduled",
+                    }
+                ],
+                "runners": _make_prog_runners(
+                    "2026-04-15_Ankara_3", range(0, 5), agf_list=[30.0, 25.0, 20.0, 15.0, 10.0]
+                ),
+            },
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # 1) --backcheck without --out must NOT create any output DB and must end with BACKCHECK OK
+    _ = capsys.readouterr()
+    rc_no_out = forward_v5.main(["--db", str(main_db), "--backcheck", "2026-04-15"])
+    assert rc_no_out == 0
+    lines_1 = [ln.strip() for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    assert lines_1[-1] == "BACKCHECK OK"
+    joined_1 = "\n".join(lines_1)
+    assert "kosu=2" in joined_1
+    assert "atlanan_sonuclanmamis=1" in joined_1
+    assert "AGF (kapanış)" in joined_1
+    assert "v5_sgr_all" in joined_1
+    assert "v6_e5" in joined_1
+    assert "spearman(v6_e5, v5_sgr_all)" in joined_1
+
+    # 2) --backcheck with --out writes predictions_v5 for both models, consumable by forward_v5_report.py
+    bc_out_db = tmp_path / "bc_preds.db"
+    rc_with_out = forward_v5.main(
+        ["--db", str(main_db), "--backcheck", "2026-04-15", "--out", str(bc_out_db)]
+    )
+    assert rc_with_out == 0
+    lines_2 = [ln.strip() for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    assert lines_2[-1] == "BACKCHECK OK"
+    assert bc_out_db.exists()
+
+    bconn = sqlite3.connect(str(bc_out_db))
+    try:
+        cnts = dict(
+            bconn.execute(
+                "SELECT model_version, COUNT(*) FROM predictions_v5 GROUP BY model_version"
+            ).fetchall()
+        )
+        assert cnts == {"v5_sgr_all": 11, "v6_e5": 11}
+    finally:
+        bconn.close()
+
+    rep_md = tmp_path / "bc_report.md"
+    rc_rep = forward_v5_report.main(
+        ["--db", str(main_db), "--forward-db", str(bc_out_db), "--out", str(rep_md)]
+    )
+    assert rc_rep == 0
+    md_txt = rep_md.read_text(encoding="utf-8")
+    assert "Üçlü Eşli Karşılaştırma Koşu Sayısı (`v5_sgr_all` ∩ `v6_e5` ∩ `AGF`):** `2`" in md_txt
+

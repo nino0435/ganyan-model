@@ -3,6 +3,7 @@ venv/
 hist/
 data/
 /data
+data/forward_models/
 *.pkl
 download.out
 __pycache__/
