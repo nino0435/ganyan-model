@@ -4,12 +4,6 @@ name: Ganyan Kaynak Yokla
 # üzerinden ölçer ve raporu + ham yanıtları artifact olarak yükler. Yalnız standart kütüphane kullanır.
 on:
   workflow_dispatch:
-    inputs:
-      use_warp:
-        description: "Cloudflare WARP proxy ile dene"
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -24,44 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cloudflare WARP proxy kur ve doğrula
-        if: ${{ inputs.use_warp }}
-        run: |
-          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
-          sudo apt-get update -qq && sudo apt-get install -y -qq cloudflare-warp
-          warp-cli --accept-tos registration new || true
-          warp-cli --accept-tos mode proxy
-          warp-cli --accept-tos proxy port 40000
-          warp-cli --accept-tos connect
-          for i in $(seq 1 25); do
-            if warp-cli --accept-tos status | grep -q "Status update: Connected"; then
-              sleep 2
-              break
-            fi
-            sleep 1
-          done
-          warp-cli --accept-tos status
-          echo "=== HTTP PROXY TEST ==="
-          curl -sS -o /tmp/lf_http.html -w "HTTP_PROXY status=%{http_code} size=%{size_download}\n" -x http://127.0.0.1:40000 -A "Mozilla/5.0" "https://liderform.com.tr/program/galop/2026-11-19/izmir/1" || true
-          echo "=== SOCKS5H TEST ==="
-          curl -sS -o /tmp/lf_socks.html -w "SOCKS5H status=%{http_code} size=%{size_download}\n" -x socks5h://127.0.0.1:40000 -A "Mozilla/5.0" "https://liderform.com.tr/program/galop/2026-11-19/izmir/1" || true
-          HTTPS_PROXY=http://127.0.0.1:40000 HTTP_PROXY=http://127.0.0.1:40000 python3 - <<'PY'
-          from ganyan.tjk import get
-          from ganyan.sources.liderform import detect_liderform_block, parse_galop_horses
-          st, body = get("https://liderform.com.tr/program/galop/2026-11-19/izmir/1")
-          html = body.decode("utf-8", errors="replace")
-          blk = detect_liderform_block(st, html)
-          horses = parse_galop_horses(html) if not blk else []
-          print(f"urllib HTTPS_PROXY: status={st}, len={len(body)}, block={blk}, horses={len(horses)}")
-          PY
-
       - name: Dış kaynakları yokla
-        if: ${{ !inputs.use_warp }}
         run: python3 scripts/probe_sources.py --external
 
       - name: Envanter ve ham örnekleri yükle
-        if: always() && !inputs.use_warp
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ganyan-kaynak-envanteri-dis

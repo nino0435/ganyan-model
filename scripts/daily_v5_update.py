@@ -11,6 +11,12 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ganyan.db import init_db
+from ganyan.sources.fetch import fetch as fetch_raw_html
+from ganyan.sources.yenibeygir import (
+    city_slug as yb_city_slug,
+    galop_url as yb_galop_url,
+    parse_galop_page as parse_yb_galop_page,
+)
 from ganyan.tjk import DOMESTIC_CITIES
 from scripts import backfill_liderform, backfill_yenibeygir
 from scripts.update_daily import update_daily
@@ -63,6 +69,70 @@ def _load_liderform_targets_incl_program(conn, start_date, end_date):
     return [(r[0], r[1], r[2], int(r[3])) for r in rows]
 
 
+def _run_yb_galop_backfill(conn, raw_dir, start_date, end_date, delay=2.0):
+    """Fetch and insert pre-race workouts from Yenibeygir `/galoplar` pages (no Cloudflare block)."""
+    targets = _load_liderform_targets_incl_program(conn, start_date, end_date)
+    races_ok = 0
+    horses_n = 0
+    total_w = 0
+    inserted_w = 0
+    unmatched = 0
+    errors = 0
+
+    for race_id, r_date, city, race_no in targets:
+        slug = yb_city_slug(city)
+        target_key = f"{r_date}/{slug}/{race_no}"
+        raw_path = os.path.join(str(raw_dir), r_date[:4], f"{r_date}_{slug}_{race_no}.html.gz")
+        url = yb_galop_url(r_date, city, race_no)
+        html_text = fetch_raw_html(
+            conn,
+            "yenibeygir_galop",
+            target_key,
+            url,
+            raw_path,
+            delay=delay,
+        )
+        if not html_text:
+            errors += 1
+            continue
+
+        horses, workouts = parse_yb_galop_page(html_text, r_date)
+        races_ok += 1
+        horses_n += len(horses)
+        hk_by_no = {}
+        for h in horses:
+            hno = h.get("horse_number")
+            if hno is None:
+                continue
+            hk = backfill_liderform.resolve_horse_key(conn, race_id, hno)
+            if hk:
+                hk_by_no[hno] = hk
+            else:
+                unmatched += 1
+
+        rows_to_insert = []
+        for w in workouts:
+            hk = hk_by_no.get(w.get("horse_number"))
+            if not hk:
+                continue
+            w_copy = dict(w)
+            w_copy["horse_key"] = hk
+            rows_to_insert.append(w_copy)
+
+        total_w += len(rows_to_insert)
+        if rows_to_insert:
+            inserted_w += backfill_liderform.insert_workouts(conn, rows_to_insert, commit=True)
+
+    return {
+        "races": races_ok,
+        "horses": horses_n,
+        "workouts": total_w,
+        "inserted": inserted_w,
+        "unmatched": unmatched,
+        "errors": errors,
+    }
+
+
 def run_daily_v5_update(
     date_str=None,
     db_path="data/ganyan.db",
@@ -71,8 +141,9 @@ def run_daily_v5_update(
     prog_dir="data/raw/program",
     yb_raw_dir="data/raw/yenibeygir",
     lf_raw_dir="data/raw/liderform",
+    galop_source="liderform",
 ) -> int:
-    """Execute fail-soft daily TJK + Yenibeygir + Liderform update; always returns 0."""
+    """Execute fail-soft daily TJK + Yenibeygir + Galop update; always returns 0."""
     d_today = (
         datetime.date.fromisoformat(str(date_str)[:10])
         if date_str is not None
@@ -127,7 +198,29 @@ def run_daily_v5_update(
     except Exception as exc:
         _log(f"UYARI: yenibeygir güncellenemedi ({exc})")
 
-    # (iii) Liderform: [yesterday, today] (pre-race galop pages), delay=2.0
+    # (iii) Galop: [yesterday, today] (pre-race galop pages), delay=2.0
+    if galop_source == "yenibeygir":
+        try:
+            yb_galop_dir = f"{yb_raw_dir}_galop"
+            os.makedirs(yb_galop_dir, exist_ok=True)
+            conn = init_db(db_path)
+            try:
+                conn.execute("PRAGMA busy_timeout=60000")
+                st = _run_yb_galop_backfill(conn, yb_galop_dir, yest_s, today_s, delay=delay)
+            finally:
+                conn.close()
+            if st["races"] == 0 and st["errors"] > 0:
+                _log(f"UYARI: yenibeygir galop güncellenemedi (hata={st['errors']})")
+            else:
+                _log(
+                    f"yenibeygir galop güncellendi ({yest_s}..{today_s}: "
+                    f"koşu={st['races']} at={st['horses']} galop={st['workouts']} "
+                    f"(yeni={st['inserted']}) eşleşmeyen_at={st['unmatched']} hata={st['errors']})"
+                )
+        except Exception as exc:
+            _log(f"UYARI: yenibeygir galop güncellenemedi ({exc})")
+        return 0
+
     try:
         os.makedirs(str(lf_raw_dir), exist_ok=True)
         conn = init_db(db_path)
@@ -170,13 +263,19 @@ def run_daily_v5_update(
 
 def build_arg_parser():
     ap = argparse.ArgumentParser(
-        description="Model v5 canlı akışı için günlük TJK + Yenibeygir + Liderform güncellemesi."
+        description="Model v5 canlı akışı için günlük TJK + Yenibeygir + Liderform/Yenibeygir galop güncellemesi."
     )
     ap.add_argument("--date", default=None, help="YYYY-MM-DD (varsayılan: İstanbul bugün)")
     ap.add_argument("--db", default="data/ganyan.db", help="Ana SQLite veritabanı yolu")
     ap.add_argument("--delay", type=float, default=2.0, help="İstekler arası bekleme süresi (sn)")
     ap.add_argument("--yb-raw-dir", default="data/raw/yenibeygir", help="Yenibeygir ham HTML dizini")
     ap.add_argument("--lf-raw-dir", default="data/raw/liderform", help="Liderform ham HTML dizini")
+    ap.add_argument(
+        "--galop-source",
+        choices=("liderform", "yenibeygir"),
+        default="liderform",
+        help="Galop kaynağı (yerelde liderform, Actions bulutunda yenibeygir)",
+    )
     return ap
 
 
@@ -190,6 +289,7 @@ def main(argv=None):
             delay=args.delay,
             yb_raw_dir=args.yb_raw_dir,
             lf_raw_dir=args.lf_raw_dir,
+            galop_source=args.galop_source,
         )
     except Exception as exc:
         _log(f"UYARI: daily_v5_update genel hata ({exc})")

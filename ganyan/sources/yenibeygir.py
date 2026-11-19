@@ -89,6 +89,16 @@ def results_url(date, city, race_no=None):
     return f"{base}/sonuclar"
 
 
+def galop_url(date, city, race_no):
+    """Build yenibeygir.com per-race galop URL: /<dd-mm-yyyy>/<slug>/<race_no>/galoplar."""
+    d = _parse_date(date)
+    slug = city_slug(city)
+    r_no = int(race_no)
+    if r_no < 1:
+        raise ValueError(f"Geçersiz koşu numarası: {race_no!r}")
+    return f"https://yenibeygir.com/{d.strftime('%d-%m-%Y')}/{slug}/{r_no}/galoplar"
+
+
 def _clean_text(fragment):
     if not fragment:
         return ""
@@ -603,3 +613,179 @@ def match_and_save_ratings(conn, parsed, date, commit=True, write=True):
         "unmatched": unmatched,
         "rows_written": written,
     }
+
+
+_YB_EFFORT_MAP = {
+    "Ç": "ALLOUT",
+    "HÇ": "DRIVING",
+    "R": "UNDERRESTRAINT",
+    "ÇR": "EASILY",
+    "T": "HARDHELD",
+    "TD": "HARDHELD",
+}
+_YB_SPLIT_COLS = ("d1600", "d1400", "d1200", "d1000", "d800", "d600", "d400", "d200")
+_AT_GALOPLAR_RE = re.compile(
+    r'<table\b[^>]*\bclass=["\'][^"\']*\bat_Galoplar\b[^"\']*["\'][^>]*>(.*?)</table>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _yb_workout_time(val):
+    s = str(val or "").strip().replace(",", ".")
+    if not s or s in ("-", "--"):
+        return None
+    parts = [p for p in s.split(".") if p != ""]
+    try:
+        if len(parts) == 3:
+            sec = int(parts[0]) * 60.0 + float(f"{parts[1]}.{parts[2]}")
+        else:
+            sec = float(s)
+    except ValueError:
+        return None
+    return round(sec, 4) if sec > 0 else None
+
+
+def parse_galop_page(html_text, race_date):
+    """Parse pre-race workouts (`date < race_date`) from a Yenibeygir `/galoplar` page."""
+    if isinstance(html_text, (bytes, bytearray)):
+        html_text = html_text.decode("utf-8", errors="replace")
+    if not html_text:
+        return [], []
+
+    cutoff = _parse_date(race_date).isoformat()
+    tbl_m = _AT_GALOPLAR_RE.search(html_text)
+    if not tbl_m:
+        return [], []
+    tbl_html = tbl_m.group(1)
+
+    thead_m = re.search(r"<thead\b[^>]*>(.*?)</thead>", tbl_html, re.DOTALL | re.IGNORECASE)
+    col_map = {}
+    if thead_m:
+        ths = [_clean_text(t) for t in re.findall(r"<th\b[^>]*>(.*?)</th>", thead_m.group(1), re.DOTALL | re.IGNORECASE)]
+        for idx, th in enumerate(ths):
+            low = th.lower()
+            if "tarih" in low:
+                col_map["date"] = idx
+            elif "şehir" in low or "sehir" in low:
+                col_map["city"] = idx
+            elif low == "kg":
+                col_map["kg"] = idx
+            elif "jokey" in low:
+                col_map["jockey"] = idx
+            elif th in ("200", "400", "600", "800", "1000", "1200", "1400", "1600"):
+                col_map[f"d{th}"] = idx
+            elif th == "Ç" or "çalışma" in low:
+                col_map["effort"] = idx
+            elif "pist" in low:
+                col_map["surface"] = idx
+
+    tbody_m = re.search(r"<tbody\b[^>]*>(.*?)</tbody>", tbl_html, re.DOTALL | re.IGNORECASE)
+    body_html = tbody_m.group(1) if tbody_m else tbl_html
+
+    horses = []
+    workouts = []
+    cur_horse_no = None
+    cur_ext_id = None
+    cur_horse_name = None
+
+    for tr_m in re.finditer(r"<tr\b[^>]*>(.*?)</tr>", body_html, re.DOTALL | re.IGNORECASE):
+        tr = tr_m.group(1)
+        atno_m = re.search(r'<span\b[^>]*\bclass=["\'][^"\']*\batno\b[^"\']*["\'][^>]*>(.*?)</span>', tr, re.DOTALL | re.IGNORECASE)
+        if atno_m:
+            no_txt = _clean_text(atno_m.group(1))
+            cur_horse_no = int(no_txt) if no_txt.isdigit() else None
+            link_m = re.search(
+                r'<a\b[^>]*href=["\']/at/(\d+)/[^"\']*["\'][^>]*\bclass=["\'][^"\']*\batisimlink\b[^"\']*["\'][^>]*>(.*?)</a>',
+                tr,
+                re.DOTALL | re.IGNORECASE,
+            ) or _ATISIM_LINK_RE.search(tr)
+            if link_m:
+                if link_m.lastindex and link_m.lastindex >= 2:
+                    cur_ext_id = link_m.group(1).strip()
+                    raw_nm = _clean_text(link_m.group(2))
+                else:
+                    cur_ext_id = None
+                    raw_nm = _clean_text(link_m.group(1))
+                cur_horse_name = clean_horse_name(raw_nm, equip_codes=YB_EQUIP_CODES)
+            else:
+                cur_ext_id = None
+                cur_horse_name = None
+            if cur_horse_no is not None or cur_horse_name:
+                horses.append({
+                    "horse_number": cur_horse_no,
+                    "ext_horse_id": cur_ext_id,
+                    "horse_name": cur_horse_name,
+                })
+            continue
+
+        if not cur_horse_name:
+            continue
+        raw_tds = re.findall(r"<td\b[^>]*>(.*?)</td>", tr, re.DOTALL | re.IGNORECASE)
+        if len(raw_tds) < 5:
+            continue
+        tds = [_clean_text(x) for x in raw_tds]
+
+        d_idx = col_map.get("date", 0)
+        if d_idx >= len(tds) or not tds[d_idx]:
+            continue
+        try:
+            w_date = _parse_date(tds[d_idx]).isoformat()
+        except ValueError:
+            continue
+        if not (w_date < cutoff):
+            continue
+
+        c_idx = col_map.get("city", 1)
+        c_cand = _canonical_city(tds[c_idx]) if c_idx < len(tds) else None
+        w_city = c_cand if c_cand in DOMESTIC_CITIES else None
+
+        kg_idx = col_map.get("kg", 2)
+        w_kg = _parse_strict_float(tds[kg_idx]) if kg_idx < len(tds) else None
+        if w_kg is not None and w_kg <= 0:
+            w_kg = None
+
+        j_idx = col_map.get("jockey", 3)
+        w_jockey = None
+        if j_idx < len(raw_tds):
+            jt_m = re.search(r'\btitle=(["\'])(.*?)\1', raw_tds[j_idx], re.DOTALL | re.IGNORECASE)
+            w_jockey = _clean_text(jt_m.group(2)) if jt_m else tds[j_idx]
+            if w_jockey in ("", "-", "--"):
+                w_jockey = None
+
+        splits = {c: None for c in _YB_SPLIT_COLS}
+        for c in _YB_SPLIT_COLS:
+            s_idx = col_map.get(c)
+            if s_idx is not None and s_idx < len(tds):
+                splits[c] = _yb_workout_time(tds[s_idx])
+
+        eff_idx = col_map.get("effort")
+        raw_eff = tds[eff_idx].upper() if (eff_idx is not None and eff_idx < len(tds)) else ""
+        w_effort = _YB_EFFORT_MAP.get(raw_eff)
+
+        longer = any(splits[c] is not None for c in ("d600", "d800", "d1000", "d1200", "d1400", "d1600"))
+        w_kind = "SPRINT" if (splits["d400"] is not None and not longer) else "GALLOP"
+
+        workouts.append({
+            "source": SOURCE,
+            "horse_number": cur_horse_no,
+            "ext_horse_id": cur_ext_id,
+            "horse_name": cur_horse_name,
+            "date": w_date,
+            "city": w_city,
+            "kind": w_kind,
+            "jockey": w_jockey,
+            "kg": w_kg,
+            "d1600": splits["d1600"],
+            "d1400": splits["d1400"],
+            "d1200": splits["d1200"],
+            "d1000": splits["d1000"],
+            "d800": splits["d800"],
+            "d600": splits["d600"],
+            "d400": splits["d400"],
+            "d200": splits["d200"],
+            "effort": w_effort,
+            "going": None,
+            "inner_outer": None,
+        })
+
+    return horses, workouts

@@ -30,11 +30,13 @@ jobs:
         with:
           ref: main
 
-      - name: Veri dalı
+      - name: Veri dalı (özel repo)
         uses: actions/checkout@v4
         with:
+          repository: nino0435/ganyan-tahmin-veri
           ref: tahmin-veri
           path: tips_data
+          ssh-key: ${{ secrets.TAHMIN_VERI_DEPLOY_KEY }}
 
       - name: Python 3.14
         uses: actions/setup-python@v5

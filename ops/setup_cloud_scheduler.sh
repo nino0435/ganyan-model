@@ -11,7 +11,7 @@ LOCATION="${GCP_LOCATION:-europe-west1}"
 REPO="nino0435/ganyan-model"
 
 if [ "${1:-}" = "--delete" ]; then
-  for name in ganyan-tahmin-saatlik ganyan-tahmin-bucuk ganyan-aksam ganyan-tahmin-topla canli-oran-sabah canli-oran-ogle; do
+  for name in ganyan-tahmin-saatlik ganyan-tahmin-bucuk ganyan-aksam ganyan-v6-sabah ganyan-v6-ogle ganyan-v6-aksam ganyan-tahmin-topla canli-oran-sabah canli-oran-ogle; do
     gcloud scheduler jobs delete "$name" --quiet --project="$PROJECT" --location="$LOCATION" || true
   done
   exit 0
@@ -21,8 +21,7 @@ fi
 : "${GITHUB_DISPATCH_PAT:?GITHUB_DISPATCH_PAT gerekli (.env.cron)}"
 
 HDRS="Accept=application/vnd.github+json,Authorization=Bearer ${GITHUB_DISPATCH_PAT},Content-Type=application/json,X-GitHub-Api-Version=2022-11-28"
-TAHMIN_URI="https://api.github.com/repos/${REPO}/actions/workflows/ganyan-tahmin.yml/dispatches"
-AKSAM_URI="https://api.github.com/repos/${REPO}/actions/workflows/ganyan-aksam.yml/dispatches"
+V6_URI="https://api.github.com/repos/${REPO}/actions/workflows/ganyan-v6-canli.yml/dispatches"
 TOPLA_URI="https://api.github.com/repos/${REPO}/actions/workflows/ganyan-tahmin-topla.yml/dispatches"
 CANLI_URI="https://api.github.com/repos/nino0435/tjk-canli-oran/actions/workflows/topla.yml/dispatches"  # açık repo (canlı oran toplayıcı)
 
@@ -37,10 +36,15 @@ upsert_job() {
     --max-retry-attempts=2 --min-backoff=30s
 }
 
-upsert_job "ganyan-tahmin-saatlik" "0 9,10,11,12,13 * * *" "$TAHMIN_URI" '{"ref":"main","inputs":{"mode":"tahmin"}}' "Ganyan tahmin (TR 09:00-13:00)"
-upsert_job "ganyan-tahmin-bucuk"   "30 14,16,18,20 * * *"  "$TAHMIN_URI" '{"ref":"main","inputs":{"mode":"tahmin"}}' "Ganyan tahmin (TR 14:30-20:30)"
-upsert_job "ganyan-aksam"          "45 0 * * *"            "$AKSAM_URI"  '{"ref":"main"}'                            "Ganyan aksam (TR 00:45)"
+# Eski v1_agf işlerini temizle
+for old_job in ganyan-tahmin-saatlik ganyan-tahmin-bucuk ganyan-aksam; do
+  gcloud scheduler jobs delete "$old_job" --quiet --project="$PROJECT" --location="$LOCATION" >/dev/null 2>&1 || true
+done
+
+upsert_job "ganyan-v6-sabah"       "40 9 * * *"            "$V6_URI"     '{"ref":"main"}' "Ganyan V6 canli sabah (TR 09:40-13:43)"
+upsert_job "ganyan-v6-ogle"        "45 13 * * *"           "$V6_URI"     '{"ref":"main"}' "Ganyan V6 canli ogle (TR 13:45-17:33)"
+upsert_job "ganyan-v6-aksam"       "34 17 * * *"           "$V6_URI"     '{"ref":"main"}' "Ganyan V6 canli aksam (TR 17:34-21:38)"
 # GitHub'ın kendi cron'u güvenilmez (15 Kas'ta saatlerce geciktirdi/atladı): toplama iş akışlarını da buradan tetikle.
-upsert_job "ganyan-tahmin-topla"   "30 7-17 * * *"         "$TOPLA_URI"  '{"ref":"main"}'                            "Gazete/bülten tahmin toplama (TR 07:30-17:30 saatlik)"
-upsert_job "canli-oran-sabah"      "55 9 * * *"            "$CANLI_URI"  '{"ref":"main"}'                            "Canli oran toplayici (TR 09:55)"
-upsert_job "canli-oran-ogle"       "25 15 * * *"           "$CANLI_URI"  '{"ref":"main"}'                            "Canli oran toplayici (TR 15:25)"
+upsert_job "ganyan-tahmin-topla"   "30 7-17 * * *"         "$TOPLA_URI"  '{"ref":"main"}' "Gazete/bülten tahmin toplama (TR 07:30-17:30 saatlik)"
+upsert_job "canli-oran-sabah"      "55 9 * * *"            "$CANLI_URI"  '{"ref":"main"}' "Canli oran toplayici (TR 09:55)"
+upsert_job "canli-oran-ogle"       "25 15 * * *"           "$CANLI_URI"  '{"ref":"main"}' "Canli oran toplayici (TR 15:25)"

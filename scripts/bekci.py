@@ -19,14 +19,14 @@ REPO = "nino0435/ganyan-model"
 LABEL = "bekci"
 
 # Cloud Scheduler tetik saatleri (Europe/Istanbul) — ops/setup_cloud_scheduler.sh ile aynı olmalı.
-TAHMIN = "Ganyan Tahmin"
-AKSAM = "Ganyan Akşam"
-SLOTS = (
-    [(TAHMIN, h, 0) for h in (9, 10, 11, 12, 13)]
-    + [(TAHMIN, h, 30) for h in (14, 16, 18, 20)]
-    + [(AKSAM, 0, 45)]
-)
-LOOKBACK = dt.timedelta(hours=3)  # bu kadar geriye bak (bekçinin kendi cron'u atlansa sonraki yakalar)
+V6_CANLI = "Ganyan V6 Canlı"
+TAHMIN = V6_CANLI
+SLOTS = [
+    (V6_CANLI, 9, 40),
+    (V6_CANLI, 13, 45),
+    (V6_CANLI, 17, 34),
+]
+LOOKBACK = dt.timedelta(hours=5)  # 3 oturum arası ~4 saat olduğundan 5 saat geriye bak
 PRE = dt.timedelta(minutes=5)  # tetikten biraz önce başlayan çalışma da sayılır
 GRACE = dt.timedelta(minutes=20)  # tetikten sonra bu kadar içinde çalışma başlamış olmalı
 BUDGET_WARN_MIN = 1700  # aylık 2000 dk sınırına yaklaşma uyarısı
@@ -112,7 +112,7 @@ def main():
         return 0
 
     runs = json.loads(_gh("run", "list", "--repo", REPO, "--limit", "100", "--json", "workflowName,createdAt,conclusion,status"))
-    problems = find_problems(now, runs, _budget_used())
+    problems = find_problems(now, runs, None)
     if problems:
         print("SORUN:\n- " + "\n- ".join(problems))
     else:

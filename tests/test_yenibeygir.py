@@ -443,3 +443,54 @@ def test_backfill_end_to_end_dry_run_and_warp_stops(tmp_path):
         assert gulerce_hiz == pytest.approx(55.0)
     finally:
         conn_check.close()
+
+
+def test_parse_galop_page_and_v5_dedup():
+    import pandas as pd
+    from ganyan.features_v5 import attach_v5
+    from ganyan.sources.yenibeygir import galop_url, parse_galop_page
+
+    assert galop_url("2026-11-19", "İzmir", 3) == "https://yenibeygir.com/19-11-2026/izmir/3/galoplar"
+
+    sample_html = """
+    <table class="at_Galoplar">
+      <thead>
+        <tr><th>Tarih</th><th>Şehir</th><th>Kg</th><th>Galop Jokey</th><th>400</th><th>600</th><th>800</th><th>1000</th><th>1200</th><th>1400</th><th>Ç</th><th>Pist</th><th></th></tr>
+      </thead>
+      <tbody>
+        <tr><td colspan="20" class="g"><span class="atno">1</span><a href="/at/108033/kurttekin" class="atisimlink">KURTTEKİN OĞLU KG</a></td></tr>
+        <tr><td>19.11.2026</td><td>İzmir</td><td>55</td><td><a title="ALİ VELİ">A.Veli</a></td><td>25.0</td><td></td><td>50.0</td><td></td><td></td><td></td><td><span>Ç</span></td><td>Kum</td><td></td></tr>
+        <tr><td>12.11.2026</td><td>Şanlıurfa</td><td>55</td><td><a title="MEHMET ŞAKİR">M.Şakir</a></td><td>27.8</td><td></td><td>54.8</td><td></td><td></td><td></td><td><span>Ç</span></td><td>Kum</td><td></td></tr>
+        <tr><td>08.11.2026</td><td>Şanlıurfa</td><td>54</td><td>-</td><td>26.2</td><td></td><td></td><td></td><td></td><td></td><td><span>R</span></td><td>Kum</td><td></td></tr>
+      </tbody>
+    </table>
+    """
+    horses, workouts = parse_galop_page(sample_html, "2026-11-19")
+    assert len(horses) == 1
+    assert horses[0]["horse_number"] == 1
+    assert horses[0]["horse_name"] == "KURTTEKİN OĞLU"
+    # Same-day workout (19.11.2026) excluded strictly (< race_date)
+    assert len(workouts) == 2
+    assert workouts[0]["date"] == "2026-11-12"
+    assert workouts[0]["kind"] == "GALLOP"
+    assert workouts[0]["effort"] == "ALLOUT"
+    assert workouts[0]["d800"] == pytest.approx(54.8)
+    assert workouts[0]["d400"] == pytest.approx(27.8)
+    assert workouts[1]["date"] == "2026-11-08"
+    assert workouts[1]["kind"] == "SPRINT"
+    assert workouts[1]["effort"] == "UNDERRESTRAINT"
+
+    # Verify attach_v5 deduplicates overlapping (horse_key, date) across liderform & yenibeygir
+    df_runners = pd.DataFrame({
+        "race_id": ["2026-11-19_İzmir_1"],
+        "date": pd.to_datetime(["2026-11-19"]),
+        "horse_key": ["H1"],
+    })
+    w_df = pd.DataFrame([
+        {"source": "liderform", "horse_key": "H1", "date": "2026-11-12", "city": "Şanlıurfa", "kind": "GALLOP", "d800": 54.8, "d600": None, "d400": 27.8, "effort": "ALLOUT"},
+        {"source": "yenibeygir", "horse_key": "H1", "date": "2026-11-12", "city": "Şanlıurfa", "kind": "GALLOP", "d800": 54.8, "d600": None, "d400": 27.8, "effort": "ALLOUT"},
+        {"source": "yenibeygir", "horse_key": "H1", "date": "2026-11-16", "city": "İzmir", "kind": "SPRINT", "d800": None, "d600": None, "d400": 25.4, "effort": "UNDERRESTRAINT"},
+    ])
+    feat = attach_v5(df_runners, {"ext": pd.DataFrame(), "workouts": w_df}, blocks=("G",))
+    assert feat["g_n14"].iloc[0] == pytest.approx(2.0)
+    assert feat["g_last_d400"].iloc[0] == pytest.approx(25.4)

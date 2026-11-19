@@ -8,7 +8,37 @@ mkdir -p data
 
 LOG_FILE="data/forward_v5.log"
 INTERVAL_SEC=120
-last_update_day=""
+last_update_day="${LAST_UPDATE_DAY:-}"
+WARP_CLI="$(command -v warp-cli 2>/dev/null || echo /usr/local/bin/warp-cli)"
+warp_opened_by_us=0
+
+cleanup_warp() {
+    if [ "$warp_opened_by_us" = "1" ] && [ -x "$WARP_CLI" ]; then
+        "$WARP_CLI" disconnect >/dev/null 2>&1 || true
+        warp_opened_by_us=0
+        printf '[%s] warp kapatıldı\n' "$(TZ=Europe/Istanbul date '+%H:%M:%S')" >> "$LOG_FILE"
+    fi
+}
+trap cleanup_warp EXIT INT TERM
+
+run_daily_with_warp() {
+    local day="$1"
+    if [ -x "$WARP_CLI" ] && ! "$WARP_CLI" status 2>/dev/null | grep -q "Status update: Connected"; then
+        printf '[%s] warp açılıyor (günlük güncelleme)\n' "$(TZ=Europe/Istanbul date '+%H:%M:%S')" >> "$LOG_FILE"
+        "$WARP_CLI" connect >/dev/null 2>&1 || true
+        warp_opened_by_us=1
+        local i
+        for i in $(seq 1 20); do
+            if "$WARP_CLI" status 2>/dev/null | grep -q "Status update: Connected"; then
+                sleep 2
+                break
+            fi
+            sleep 1
+        done
+    fi
+    venv/bin/python -u scripts/daily_v5_update.py --date "$day" >> "$LOG_FILE" 2>&1 || true
+    cleanup_warp
+}
 
 ist_window_state() {
     venv/bin/python -c '
@@ -38,7 +68,7 @@ while true; do
 
     if [ "$in_win" = "1" ]; then
         if [ "$last_update_day" != "$ist_day" ]; then
-            venv/bin/python -u scripts/daily_v5_update.py --date "$ist_day" >> "$LOG_FILE" 2>&1 || true
+            run_daily_with_warp "$ist_day"
             last_update_day="$ist_day"
         fi
         venv/bin/python -u scripts/forward_v5.py --date "$ist_day" --once >> "$LOG_FILE" 2>&1 || true

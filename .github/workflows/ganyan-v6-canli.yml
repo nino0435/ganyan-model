@@ -1,0 +1,236 @@
+name: Ganyan V6 Canlı
+
+# Mac bağımsız V5 (v5_sgr_all) + V6 (v6_e5) günlük güncelleme ve canlı koşu-öncesi tahmin döngüsü.
+# Cloud Scheduler günde 3 oturum tetikler (TR 09:40 -> 13:43, 13:45 -> 17:33, 17:34 -> 21:38).
+on:
+  workflow_dispatch:
+    inputs:
+      max_minutes:
+        description: "İsteğe bağlı azami çalışma süresi (dakika; boşsa oturum sonu saatine dek çalışır)"
+        required: false
+        default: ""
+        type: string
+      force_update:
+        description: "Günlük TJK + Yenibeygir hız/galop güncellemesini zorla"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ganyan-v6-canli
+  cancel-in-progress: false
+
+env:
+  TZ: Europe/Istanbul
+  PYTHONUTF8: "1"
+
+jobs:
+  canli:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Depoyu indir
+        uses: actions/checkout@v4
+
+      - name: Python kurulumu
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: "pip"
+          cache-dependency-path: "requirements*.txt"
+
+      - name: Bağımlılıkları kur
+        run: |
+          pip install -r requirements.txt
+          sudo apt-get update -qq && sudo apt-get install -y -qq zstd
+
+      - name: actions-state dalını hazırla
+        run: |
+          if git ls-remote --exit-code --heads origin actions-state >/dev/null 2>&1; then
+            git fetch origin actions-state --depth=1
+            git worktree add state origin/actions-state
+            git -C state checkout -B actions-state origin/actions-state
+          else
+            git worktree add --detach state
+            git -C state checkout --orphan actions-state
+            git -C state rm -rf . >/dev/null 2>&1 || true
+          fi
+          mkdir -p data/forward_models
+
+      - name: Durum önbelleğini geri yükle (actions/cache)
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/ganyan.db
+            data/forward_models
+          key: ganyan-v6-state-${{ github.run_id }}
+          restore-keys: |
+            ganyan-v6-state-
+
+      - name: Önbellek boşsa v6-state-backup Release arşivinden geri yükle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -s data/ganyan.db ]; then
+            echo "Önbellekte tam veritabanı yok; v6-state-backup Release indiriliyor..."
+            gh release download v6-state-backup -p ganyan-v6-state.tar.zst --clobber
+            tar --zstd -xf ganyan-v6-state.tar.zst
+            rm -f ganyan-v6-state.tar.zst
+          fi
+          ls -lh data/ganyan.db data/forward_models/ || true
+
+      - name: Günlük güncelleme ve canlı V6 tahmin döngüsü
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_MAX_MIN: ${{ inputs.max_minutes }}
+          INPUT_FORCE_UPDATE: ${{ inputs.force_update }}
+        shell: bash
+        run: |
+          set -u
+          git -C state config user.name "github-actions[bot]"
+          git -C state config user.email "41898282+github-actions[bot]"
+
+          TODAY="$(date '+%Y-%m-%d')"
+          find data/forward_models -type f -name "*.pkl" ! -name "${TODAY}_*" -delete 2>/dev/null || true
+
+          push_state() {
+            local msg="$1"
+            if [ -s state/forward_v5.db ]; then
+              python -c "import sqlite3; c=sqlite3.connect('state/forward_v5.db'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()" 2>/dev/null || true
+            fi
+            rm -f state/forward_v5.db-wal state/forward_v5.db-shm
+            if [ -f state/forward_v5.log ] && [ "$(wc -l < state/forward_v5.log)" -gt 2500 ]; then
+              tail -n 2000 state/forward_v5.log > state/forward_v5.log.tmp && mv state/forward_v5.log.tmp state/forward_v5.log
+            fi
+            for f in forward_v5.db FORWARD_V5.md forward_v5.log last_daily_update.txt; do
+              [ -f "state/$f" ] && git -C state add -f "$f"
+            done
+            if git -C state diff --cached --quiet; then
+              return 0
+            fi
+            git -C state commit -m "$msg" || return 0
+            local attempt
+            for attempt in 1 2 3; do
+              if git -C state push origin HEAD:refs/heads/actions-state; then
+                return 0
+              fi
+              git -C state pull --rebase origin actions-state || git -C state rebase --abort >/dev/null 2>&1 || true
+              sleep 2
+            done
+            echo "UYARI: actions-state push başarısız ($msg)"
+            return 0
+          }
+
+          upload_backup() {
+            echo "[$(date '+%H:%M:%S')] v6-state-backup paketi hazırlanıyor..."
+            tar -cf - data/ganyan.db data/forward_models | zstd -1 -T0 -q -o ganyan-v6-state.tar.zst
+            gh release upload v6-state-backup ganyan-v6-state.tar.zst --clobber || \
+              gh release create v6-state-backup ganyan-v6-state.tar.zst --title "V6 State Backup" --notes "Otomatik V6 tam durum yedeği"
+            rm -f ganyan-v6-state.tar.zst
+          }
+
+          pred_count() {
+            if [ ! -s state/forward_v5.db ]; then
+              echo 0
+              return
+            fi
+            python -c "import sqlite3; c=sqlite3.connect('state/forward_v5.db'); print(c.execute('SELECT COUNT(*) FROM predictions_v5').fetchone()[0])" 2>/dev/null || echo 0
+          }
+
+          LAST_UPD=""
+          [ -f state/last_daily_update.txt ] && LAST_UPD="$(tr -d '[:space:]' < state/last_daily_update.txt)"
+          CUR_HM="$(date '+%H%M')"
+          NEED_BACKUP=0
+
+          if [ "$INPUT_FORCE_UPDATE" = "true" ] || { [ "$LAST_UPD" != "$TODAY" ] && [ "$CUR_HM" -ge "0930" ]; }; then
+            echo "[$(date '+%H:%M:%S')] Günlük güncelleme başlıyor (${TODAY})..." | tee -a state/forward_v5.log
+            python -u scripts/daily_v5_update.py --date "$TODAY" --db data/ganyan.db --galop-source yenibeygir | tee -a state/forward_v5.log || true
+            python -u scripts/forward_v5.py --date "$TODAY" --db data/ganyan.db --out /tmp/prewarm.db --model-cache-dir data/forward_models --due-max-min 1000 --once >/dev/null 2>&1 || true
+            rm -f /tmp/prewarm.db
+            python scripts/forward_v5_report.py --db data/ganyan.db --forward-db state/forward_v5.db --out state/FORWARD_V5.md || true
+            echo "$TODAY" > state/last_daily_update.txt
+            push_state "v6 günlük güncelleme ${TODAY}"
+            upload_backup
+          fi
+
+          # Oturum bitiş zamanını hesapla (İstanbul saati)
+          END_EPOCH="$(python - <<'PY'
+          import datetime, os
+          from zoneinfo import ZoneInfo
+          tz = ZoneInfo("Europe/Istanbul")
+          now = datetime.datetime.now(tz)
+          max_m = os.environ.get("INPUT_MAX_MIN", "").strip()
+          if max_m:
+              end_dt = now + datetime.timedelta(minutes=float(max_m))
+          else:
+              hm = now.hour * 60 + now.minute
+              if hm < 9 * 60 + 25 or hm >= 21 * 60 + 38:
+                  end_dt = now + datetime.timedelta(seconds=30)
+              elif hm < 13 * 60 + 40:
+                  end_dt = now.replace(hour=13, minute=43, second=0, microsecond=0)
+              elif hm < 17 * 60 + 30:
+                  end_dt = now.replace(hour=17, minute=33, second=0, microsecond=0)
+              else:
+                  end_dt = now.replace(hour=21, minute=38, second=0, microsecond=0)
+          print(int(end_dt.timestamp()))
+          PY
+          )"
+
+          echo "[$(date '+%H:%M:%S')] Canlı döngü aktif (bitiş epoch=${END_EPOCH})" | tee -a state/forward_v5.log
+          MODEL_EXISTED=0
+          [ -s "data/forward_models/${TODAY}_v6_e5.pkl" ] && MODEL_EXISTED=1
+
+          while true; do
+            BEFORE_N="$(pred_count)"
+            python -u scripts/forward_v5.py \
+              --date "$TODAY" \
+              --db data/ganyan.db \
+              --out state/forward_v5.db \
+              --model-cache-dir data/forward_models \
+              --once | tee -a state/forward_v5.log || true
+            AFTER_N="$(pred_count)"
+
+            if [ "$AFTER_N" -gt "$BEFORE_N" ]; then
+              push_state "v6 tahmin $(date '+%Y-%m-%d %H:%M:%S')"
+            fi
+
+            if [ "$MODEL_EXISTED" = "0" ] && [ -s "data/forward_models/${TODAY}_v6_e5.pkl" ]; then
+              MODEL_EXISTED=1
+              NEED_BACKUP=1
+            fi
+
+            NOW_EPOCH="$(date +%s)"
+            REM=$(( END_EPOCH - NOW_EPOCH ))
+            if [ "$REM" -le 0 ]; then
+              break
+            fi
+            if [ "$REM" -gt 60 ]; then
+              sleep 60
+            else
+              sleep "$REM"
+            fi
+          done
+
+          if [ "$(date '+%H%M')" -ge "2130" ]; then
+            python scripts/update_daily.py --date "$TODAY" --db data/ganyan.db || true
+            python scripts/forward_v5_report.py --db data/ganyan.db --forward-db state/forward_v5.db --out state/FORWARD_V5.md || true
+            NEED_BACKUP=1
+          fi
+
+          push_state "v6 oturum sonu $(date '+%Y-%m-%d %H:%M:%S')"
+          if [ "$NEED_BACKUP" = "1" ]; then
+            upload_backup
+          fi
+
+      - name: Durum önbelleğini kaydet
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/ganyan.db
+            data/forward_models
+          key: ganyan-v6-state-${{ github.run_id }}

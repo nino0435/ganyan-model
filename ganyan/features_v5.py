@@ -127,7 +127,7 @@ def load_v5_tables(conn):
                 """
                 SELECT *
                 FROM workouts
-                WHERE source = 'liderform'
+                WHERE source IN ('liderform', 'yenibeygir')
                   AND horse_key IS NOT NULL
                   AND horse_key != ''
                 """,
@@ -370,11 +370,20 @@ def attach_G(df, workouts=None):
         w = workouts.copy()
         if "source" in w.columns:
             src_s = w["source"].astype("string").str.strip()
-            if (src_s == "liderform").any() or src_s.notna().any():
-                w = w[src_s == "liderform"].copy()
+            if src_s.isin(["liderform", "yenibeygir"]).any() or src_s.notna().any():
+                w = w[src_s.isin(["liderform", "yenibeygir"])].copy()
         w["_hk_s"] = _clean_entity_str(w["horse_key"])
         w["_dt"] = pd.to_datetime(w["date"], errors="coerce")
         w = w[w["_hk_s"].notna() & w["_dt"].notna()].copy()
+        if "source" in w.columns and len(w) > 0:
+            w_src = w["source"].astype("string").str.strip()
+            if (w_src == "yenibeygir").any():
+                w["_src_prio"] = np.where(w_src == "liderform", 0, 1)
+                w = (
+                    w.sort_values("_src_prio", kind="mergesort")
+                    .drop_duplicates(subset=["_hk_s", "_dt"], keep="first")
+                    .drop(columns=["_src_prio"])
+                )
     else:
         w = pd.DataFrame()
 
