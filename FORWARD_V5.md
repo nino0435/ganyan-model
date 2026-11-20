@@ -6,28 +6,28 @@
 
 - **Ana Veritabanı:** `data/ganyan.db` (salt-okunur)
 - **İleri-Test Tahmin Veritabanı:** `state/forward_v5.db` (salt-okunur)
-- **Üçlü Eşli Karşılaştırma Koşu Sayısı (`v5_sgr_all` ∩ `v6_e5` ∩ `AGF`):** `41`
-- **Kullanılan AGF Kaynağı:** `agf_snapshots` (tahmin anındaki AGF — `41` / `41` koşunun tamamı)
+- **Üçlü Eşli Karşılaştırma Koşu Sayısı (`v5_sgr_all` ∩ `v6_e5` ∩ `AGF`):** `52`
+- **Kullanılan AGF Kaynağı:** `agf_snapshots` (tahmin anındaki AGF — `52` / `52` koşunun tamamı)
 
 ## 2. Eşli Performans Karşılaştırması (`v5_sgr_all` vs `v6_e5` vs `AGF`)
 
 | Yöntem | Koşu | Ort. Log-Loss | 1. Tercih İsabeti | İlk-2 İsabeti | İlk-3 İsabeti |
 |---|---:|---:|---:|---:|---:|
-| `AGF` | 41 | 1.8255 | 31.71% | 48.78% | 60.98% |
-| `v5_sgr_all` | 41 | 1.7887 | 34.15% | 48.78% | 60.98% |
-| `v6_e5` | 41 | 1.7690 | 34.15% | 46.34% | 63.41% |
+| `AGF` | 52 | 1.9167 | 30.77% | 44.23% | 63.46% |
+| `v5_sgr_all` | 52 | 1.9111 | 32.69% | 48.08% | 61.54% |
+| `v6_e5` | 52 | 1.9002 | 32.69% | 44.23% | 63.46% |
 
 ### Eşli ΔLL ve Koşu-Bazlı Bootstrap %95 Güven Aralığı (2000 Tekrar, `seed=0`)
 
 | Karşılaştırma (Negatif = Sol Model Daha İyi) | Koşu | Eşli Ort. ΔLL | Bootstrap %95 GA |
 |---|---:|---:|---|
-| `v6_e5 − v5_sgr_all` | 41 | `-0.0197` | `[-0.0405, +0.0016]` |
-| `v6_e5 − AGF` | 41 | `-0.0564` | `[-0.1118, +0.0002]` |
-| `v5_sgr_all − AGF` | 41 | `-0.0367` | `[-0.0915, +0.0168]` |
+| `v6_e5 − v5_sgr_all` | 52 | `-0.0110` | `[-0.0300, +0.0083]` |
+| `v6_e5 − AGF` | 52 | `-0.0166` | `[-0.0713, +0.0371]` |
+| `v5_sgr_all − AGF` | 52 | `-0.0056` | `[-0.0599, +0.0469]` |
 
 ## 3. Model Başına `s_cov` / `g_cov` ve Tekil Performans Özeti
 
 | Model | Kayıtlı Koşu | Tarih Aralığı | `s_cov` Ort. (Medyan / Min) | `g_cov` Ort. (Medyan / Min) | Sonuçlanmış Koşu | Tekil Ort. LL | 1. Tercih / İlk-2 / İlk-3 | Eşli ΔLL vs AGF (%95 GA) |
 |---|---:|---|---|---|---:|---:|---|---|
-| `v5_sgr_all` | 45 | `2026-11-15`…`2026-11-19` | 90.2% (100.0% / 36.4%) | 95.7% (100.0% / 69.2%) | 45 | 1.7926 | 33.3% / 51.1% / 62.2% | `-0.0396` (`[-0.0921, +0.0103]`) |
-| `v6_e5` | 41 | `2026-11-17`…`2026-11-19` | 89.2% (92.9% / 36.4%) | 95.4% (100.0% / 69.2%) | 41 | 1.7690 | 34.1% / 46.3% / 63.4% | `-0.0564` (`[-0.1118, +0.0002]`) |
+| `v5_sgr_all` | 57 | `2026-11-15`…`2026-11-20` | 90.7% (100.0% / 36.4%) | 95.9% (100.0% / 69.2%) | 56 | 1.9055 | 32.1% / 50.0% / 62.5% | `-0.0101` (`[-0.0612, +0.0404]`) |
+| `v6_e5` | 53 | `2026-11-17`…`2026-11-20` | 90.0% (100.0% / 36.4%) | 95.8% (100.0% / 69.2%) | 52 | 1.9002 | 32.7% / 44.2% / 63.5% | `-0.0166` (`[-0.0713, +0.0371]`) |
