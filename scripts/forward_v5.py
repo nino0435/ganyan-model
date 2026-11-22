@@ -1,4 +1,4 @@
-"""Live forward predictor and backcheck runner for Model v5 (`v5_sgr_all`) and Model v6 (`v6_e5`)."""
+"""Live forward predictor and backcheck runner for Model v5 (`v5_sgr_all`), v6 (`v6_e5`), and v7 (`v7_tcjp`)."""
 import argparse
 import datetime
 import gc
@@ -16,20 +16,24 @@ from scipy.stats import spearmanr
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ganyan import model_v6 as _model_v6_mod
+from ganyan import model_v7 as _model_v7_mod
 from ganyan.agf_check import agf_complete
 from ganyan.features import build_features
 from ganyan.features_v5 import attach_v5, load_v5_tables
+from ganyan.features_v7 import attach_v7
 from ganyan.live_odds import minutes_to_post
 from ganyan.model import fit_predict_df
 from ganyan.model_v5 import get_b1x_cols
 from ganyan.model_v6 import V6_LIVE_MODEL_VERSION, fit_predict_v6_live
+from ganyan.model_v7 import V7_LIVE_MODEL_VERSION, fit_predict_v7_live
 from scripts.snapshot_agf import snapshot_agf
 
 IST_TZ = ZoneInfo("Europe/Istanbul")
 MODEL_VERSION = "v5_sgr_all"
 V6_MODEL_VERSION = V6_LIVE_MODEL_VERSION
-DEFAULT_MODELS = (MODEL_VERSION, V6_MODEL_VERSION)
-SUPPORTED_MODELS = (MODEL_VERSION, V6_MODEL_VERSION)
+V7_MODEL_VERSION = V7_LIVE_MODEL_VERSION
+DEFAULT_MODELS = (MODEL_VERSION, V6_MODEL_VERSION, V7_MODEL_VERSION)
+SUPPORTED_MODELS = (MODEL_VERSION, V6_MODEL_VERSION, V7_MODEL_VERSION)
 DEFAULT_OUT_DB = "data/forward_v5.db"
 DEFAULT_MODEL_CACHE_DIR = "data/forward_models"
 REF_END = "2017-01-01"
@@ -38,6 +42,8 @@ DEFAULT_DUE_MAX_MIN = 8.0
 
 _ORIG_V6_CONFIG = _model_v6_mod.V6_CONFIG
 V6_CONFIG = _ORIG_V6_CONFIG
+_ORIG_V7_CONFIG = _model_v7_mod.V7_CONFIG
+V7_CONFIG = _ORIG_V7_CONFIG
 
 PREDICTIONS_V5_SQL = """
 CREATE TABLE IF NOT EXISTS predictions_v5 (
@@ -64,6 +70,12 @@ def _resolve_live_v6_config():
     if V6_CONFIG is not _ORIG_V6_CONFIG:
         return V6_CONFIG
     return _model_v6_mod.V6_CONFIG
+
+
+def _resolve_live_v7_config():
+    if V7_CONFIG is not _ORIG_V7_CONFIG:
+        return V7_CONFIG
+    return _model_v7_mod.V7_CONFIG
 
 
 def _parse_models(models=None, model_version=None):
@@ -209,7 +221,7 @@ def _read_predicted_ids(out_conn, model_version=MODEL_VERSION):
     return {r[0] for r in rows}
 
 
-def _load_runners_with_today(conn, date_str, overlay_snapshots=True):
+def _load_runners_with_today(conn, date_str, overlay_snapshots=True, require_today=True):
     """Tek SQL (forward_log ile aynı): date < bugün ve status='result' + bugünün iptal olmayan program satırları;
     ardından (canlı kipte) son AGF bindirmesi ve bugünün sonuç sütunlarının maskelenmesi."""
     race_cols = {r[1] for r in conn.execute("PRAGMA table_info(races)").fetchall()}
@@ -233,7 +245,7 @@ def _load_runners_with_today(conn, date_str, overlay_snapshots=True):
        OR (r.date = ? AND COALESCE(r.status, '') != 'cancelled')
     """
     df = pd.read_sql_query(query, conn, params=(date_str, date_str))
-    if df.empty or not (df["date"] == date_str).any():
+    if df.empty or (require_today and not (df["date"] == date_str).any()):
         return pd.DataFrame()
 
     if overlay_snapshots:
@@ -395,8 +407,30 @@ def _fit_predict_v5_from_feat(feat_df, ds, train_start, target_race_ids):
     return today_df[keep_cols].copy()
 
 
-def _fit_predict_v6_from_feat(feat_df, ds, train_start, target_race_ids, v6_cfg, cache_path=None):
-    """Exact `v6_e5` training slice (`_has_race_win` + `require_agf`) and 5-seed + gamma prediction."""
+def _base_sig(cfg):
+    return (
+        str(cfg.get("history_start", "2006-03-04")),
+        tuple(cfg.get("extra_blocks") or ()),
+    )
+
+
+def _build_v6_base_feat(df, tables, ds, cfg, main_db=None):
+    """Build V6 base features (`build_features` + `attach_v5` + optional `attach_v6`) for `cfg`."""
+    df_sub, tables_sub, _ = _prepare_v6_inputs(df, tables, ds, cfg)
+    feat = build_features(df_sub, ref_end=REF_END)
+    del df_sub
+    feat = attach_v5(feat, tables_sub, blocks=("S", "G", "R"))
+    del tables_sub
+    extra_blocks = tuple(cfg.get("extra_blocks") or ())
+    if extra_blocks:
+        from ganyan.features_v6 import attach_v6, load_v6_tables
+
+        feat = attach_v6(feat, load_v6_tables(main_db), blocks=extra_blocks)
+    return feat
+
+
+def _select_v6_train_df(feat_df, ds, train_start, cfg):
+    """Exact V6/V7 historical training slice (`_has_race_win` + `require_agf`)."""
     train_ts = pd.Timestamp(train_start)
     today_ts = pd.Timestamp(ds)
     has_race_win = feat_df.groupby("race_id", sort=False)["win"].transform("sum") >= 1
@@ -406,22 +440,36 @@ def _fit_predict_v6_from_feat(feat_df, ds, train_start, target_race_ids, v6_cfg,
         & feat_df["win"].notna()
         & has_race_win
     )
-    if v6_cfg.get("require_agf", True):
+    if cfg.get("require_agf", True):
         ok_train = ok_train & feat_df["agf_share"].notna()
+    return feat_df[ok_train]
 
-    train_df = feat_df[ok_train]
+
+def _fit_predict_live_from_feat(
+    feat_df,
+    ds,
+    train_start,
+    target_race_ids,
+    cfg,
+    model_version,
+    live_fn,
+    cache_path=None,
+):
+    """Shared training slice and live/backcheck prediction helper for V6 and V7."""
+    train_df = _select_v6_train_df(feat_df, ds, train_start, cfg)
     if train_df.empty or (train_df["finish"] == 1).nunique() < 2:
-        _log(f"UYARI ({V6_MODEL_VERSION}): eğitim verisi yetersiz (satır={len(train_df)})")
+        _log(f"UYARI ({model_version}): eğitim verisi yetersiz (satır={len(train_df)})")
         return None
 
+    today_ts = pd.Timestamp(ds)
     today_df = feat_df[(feat_df["date"] == today_ts) & feat_df["race_id"].isin(list(target_race_ids))].copy()
     if today_df.empty:
         return None
 
-    today_df["p_win"] = fit_predict_v6_live(
+    today_df["p_win"] = live_fn(
         train_df,
         today_df,
-        config=v6_cfg,
+        config=cfg,
         year=int(today_ts.year),
         cache_path=cache_path,
         cache_meta={"date": ds, "train_start": str(train_start)},
@@ -435,34 +483,70 @@ def _fit_predict_v6_from_feat(feat_df, ds, train_start, target_race_ids, v6_cfg,
     return today_df[keep_cols].copy()
 
 
+def _fit_predict_v6_from_feat(feat_df, ds, train_start, target_race_ids, v6_cfg, cache_path=None):
+    """Exact `v6_e5` training slice (`_has_race_win` + `require_agf`) and 5-seed + gamma prediction."""
+    return _fit_predict_live_from_feat(
+        feat_df,
+        ds=ds,
+        train_start=train_start,
+        target_race_ids=target_race_ids,
+        cfg=v6_cfg,
+        model_version=V6_MODEL_VERSION,
+        live_fn=fit_predict_v6_live,
+        cache_path=cache_path,
+    )
+
+
+def _fit_predict_v7_from_feat(feat_df, ds, train_start, target_race_ids, v7_cfg, cache_path=None):
+    """Exact `v7_tcjp` training slice (`_has_race_win` + `require_agf`) and 5-seed + V7 gamma prediction."""
+    return _fit_predict_live_from_feat(
+        feat_df,
+        ds=ds,
+        train_start=train_start,
+        target_race_ids=target_race_ids,
+        cfg=v7_cfg,
+        model_version=V7_MODEL_VERSION,
+        live_fn=fit_predict_v7_live,
+        cache_path=cache_path,
+    )
+
+
 def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_dir=None, main_db=None):
     """Shared feature-building and model-prediction pipeline for both `run_once` and `run_backcheck`.
 
-    Isolates errors per model so a failure in one model never blocks the other.
-    Shares `feat_df` when `df` already matches V6's `history_start` window; otherwise frees `feat_v5`
-    before building V6's `2006-03-04+` feature frame so peak memory stays <= ~5 GB (<< 12 GB).
+    Isolates errors per model so a failure in one model never blocks the others.
+    Shares base feature frames across models when `history_start` and `extra_blocks` match, while
+    freeing intermediate copies aggressively so peak memory stays <= ~5 GB (<< 12 GB).
     """
     preds_by_model = {}
     errors_by_model = {}
 
     need_v5 = bool(race_ids_by_model.get(MODEL_VERSION))
     need_v6 = bool(race_ids_by_model.get(V6_MODEL_VERSION))
-    shared_feat = None
+    need_v7 = bool(race_ids_by_model.get(V7_MODEL_VERSION))
+    base_feat_cache = None
+    base_sig_cache = None
 
     if need_v5:
         feat_v5 = None
         try:
             feat_v5 = build_features(df, ref_end=REF_END)
             feat_v5 = attach_v5(feat_v5, tables, blocks=("S", "G", "R"))
-            if need_v6:
-                try:
-                    v6_peek = _resolve_live_v6_config()
-                    if v6_peek is not None:
-                        _, _, can_share = _prepare_v6_inputs(df, tables, ds, v6_peek, check_only=True)
+            if need_v6 or need_v7:
+                for peek_cfg in (
+                    _resolve_live_v6_config() if need_v6 else None,
+                    _resolve_live_v7_config() if need_v7 else None,
+                ):
+                    if peek_cfg is None:
+                        continue
+                    try:
+                        _, _, can_share = _prepare_v6_inputs(df, tables, ds, peek_cfg, check_only=True)
                         if can_share:
-                            shared_feat = feat_v5
-                except Exception:
-                    pass
+                            base_feat_cache = feat_v5
+                            base_sig_cache = _base_sig(peek_cfg)
+                            break
+                    except Exception:
+                        pass
             pred_v5 = _fit_predict_v5_from_feat(
                 feat_v5,
                 ds=ds,
@@ -475,7 +559,7 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
             errors_by_model[MODEL_VERSION] = exc
             _log(f"HATA ({MODEL_VERSION}): {exc}")
         finally:
-            if shared_feat is None and feat_v5 is not None:
+            if base_feat_cache is None and feat_v5 is not None:
                 del feat_v5
                 gc.collect()
 
@@ -485,20 +569,18 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
             v6_cfg = _resolve_live_v6_config()
             if v6_cfg is None:
                 raise ValueError("V6_CONFIG tanımlı değil (None).")
-            if shared_feat is not None:
-                feat_v6 = shared_feat
-                shared_feat = None
+            sig_v6 = _base_sig(v6_cfg)
+            if base_feat_cache is not None and base_sig_cache == sig_v6:
+                feat_v6 = base_feat_cache
             else:
-                df_v6, tables_v6, _ = _prepare_v6_inputs(df, tables, ds, v6_cfg)
-                feat_v6 = build_features(df_v6, ref_end=REF_END)
-                del df_v6
-                feat_v6 = attach_v5(feat_v6, tables_v6, blocks=("S", "G", "R"))
-                del tables_v6
-                extra_blocks = tuple(v6_cfg.get("extra_blocks") or ())
-                if extra_blocks:
-                    from ganyan.features_v6 import attach_v6, load_v6_tables
-
-                    feat_v6 = attach_v6(feat_v6, load_v6_tables(main_db), blocks=extra_blocks)
+                base_feat_cache = None
+                base_sig_cache = None
+                feat_v6 = _build_v6_base_feat(df, tables, ds, v6_cfg, main_db=main_db)
+                if need_v7:
+                    v7_peek = _resolve_live_v7_config()
+                    if v7_peek is not None and _base_sig(v7_peek) == sig_v6:
+                        base_feat_cache = feat_v6
+                        base_sig_cache = sig_v6
 
             c_path = (
                 os.path.join(str(cache_dir), f"{ds}_{V6_MODEL_VERSION}.pkl")
@@ -519,12 +601,199 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
             errors_by_model[V6_MODEL_VERSION] = exc
             _log(f"HATA ({V6_MODEL_VERSION}): {exc}")
         finally:
-            shared_feat = None
-            if feat_v6 is not None:
-                del feat_v6
+            if not (need_v7 and base_feat_cache is feat_v6):
+                if base_feat_cache is feat_v6:
+                    base_feat_cache = None
+                    base_sig_cache = None
+                if feat_v6 is not None:
+                    del feat_v6
+                gc.collect()
+
+    if need_v7:
+        feat_base = None
+        feat_v7 = None
+        try:
+            v7_cfg = _resolve_live_v7_config()
+            if v7_cfg is None:
+                raise ValueError("V7_CONFIG tanımlı değil (None).")
+            sig_v7 = _base_sig(v7_cfg)
+            if base_feat_cache is not None and base_sig_cache == sig_v7:
+                feat_base = base_feat_cache
+                base_feat_cache = None
+                base_sig_cache = None
+            else:
+                base_feat_cache = None
+                base_sig_cache = None
+                feat_base = _build_v6_base_feat(df, tables, ds, v7_cfg, main_db=main_db)
+
+            v7_blocks = tuple(v7_cfg.get("v7_blocks") or ())
+            if v7_blocks:
+                feat_v7 = attach_v7(feat_base, blocks=v7_blocks)
+            else:
+                feat_v7 = feat_base
+            del feat_base
+            feat_base = None
+            gc.collect()
+
+            c_path = (
+                os.path.join(str(cache_dir), f"{ds}_{V7_MODEL_VERSION}.pkl")
+                if cache_dir
+                else None
+            )
+            pred_v7 = _fit_predict_v7_from_feat(
+                feat_v7,
+                ds=ds,
+                train_start=train_start,
+                target_race_ids=race_ids_by_model[V7_MODEL_VERSION],
+                v7_cfg=v7_cfg,
+                cache_path=c_path,
+            )
+            if pred_v7 is not None and not pred_v7.empty:
+                preds_by_model[V7_MODEL_VERSION] = pred_v7
+        except Exception as exc:
+            errors_by_model[V7_MODEL_VERSION] = exc
+            _log(f"HATA ({V7_MODEL_VERSION}): {exc}")
+        finally:
+            base_feat_cache = None
+            base_sig_cache = None
+            if feat_base is not None:
+                del feat_base
+            if feat_v7 is not None:
+                del feat_v7
             gc.collect()
 
     return preds_by_model, errors_by_model
+
+
+def prewarm_models(
+    date_str=None,
+    main_db="data/ganyan.db",
+    train_start=DEFAULT_TRAIN_START,
+    models=None,
+    cache_dir=DEFAULT_MODEL_CACHE_DIR,
+):
+    """Pre-train and cache daily V6/V7 model bundles for `date_str` without waiting for live AGF."""
+    active_models = _parse_models(models=models)
+    ds = str(date_str)[:10] if date_str is not None else datetime.datetime.now(IST_TZ).date().isoformat()
+    if not os.path.exists(str(main_db)):
+        _log(f"UYARI (prewarm): ana veritabanı bulunamadı ({main_db})")
+        return []
+
+    v6_cfg = _resolve_live_v6_config() if V6_MODEL_VERSION in active_models else None
+    v7_cfg = _resolve_live_v7_config() if V7_MODEL_VERSION in active_models else None
+
+    v6_target = None
+    if V6_MODEL_VERSION in active_models:
+        if v6_cfg is None:
+            _log(f"UYARI ({V6_MODEL_VERSION}): V6_CONFIG tanımlı değil (None).")
+        else:
+            p6 = os.path.join(str(cache_dir), f"{ds}_{V6_MODEL_VERSION}.pkl")
+            k6 = _model_v6_mod.build_v6_cache_key(ds, str(train_start), config=v6_cfg)
+            if _model_v6_mod._load_v6_bundle_cache(p6, k6) is None:
+                v6_target = (p6, k6, v6_cfg)
+
+    v7_target = None
+    if V7_MODEL_VERSION in active_models:
+        if v7_cfg is None:
+            _log(f"UYARI ({V7_MODEL_VERSION}): V7_CONFIG tanımlı değil (None).")
+        else:
+            p7 = os.path.join(str(cache_dir), f"{ds}_{V7_MODEL_VERSION}.pkl")
+            k7 = _model_v7_mod.build_v7_cache_key(ds, str(train_start), config=v7_cfg)
+            if _model_v6_mod._load_v6_bundle_cache(p7, k7) is None:
+                v7_target = (p7, k7, v7_cfg)
+
+    if v6_target is None and v7_target is None:
+        _log(f"prewarm: önbellek zaten hazır ({ds})")
+        return []
+
+    ro_conn = _open_ro_db(main_db)
+    try:
+        df = _load_runners_with_today(ro_conn, ds, overlay_snapshots=False, require_today=False)
+        if df.empty:
+            _log(f"UYARI (prewarm): eğitim verisi bulunamadı ({ds})")
+            return []
+        raw_tables = load_v5_tables(ro_conn)
+    finally:
+        ro_conn.close()
+
+    tables = _filter_v5_tables_pre_day(raw_tables, df, ds)
+    del raw_tables
+
+    warmed = []
+    base_feat = None
+    base_sig = None
+
+    if v6_target is not None:
+        p6, k6, cfg6 = v6_target
+        t0 = time.monotonic()
+        try:
+            base_feat = _build_v6_base_feat(df, tables, ds, cfg6, main_db=main_db)
+            base_sig = _base_sig(cfg6)
+            tr6 = _select_v6_train_df(base_feat, ds, train_start, cfg6)
+            if tr6.empty or (tr6["finish"] == 1).nunique() < 2:
+                _log(f"UYARI ({V6_MODEL_VERSION} prewarm): eğitim verisi yetersiz (satır={len(tr6)})")
+            else:
+                bundle6 = _model_v6_mod.fit_v6_model_bundle(tr6, config=cfg6)
+                _model_v6_mod._save_v6_bundle_cache({"cache_key": k6, "bundle": bundle6}, p6)
+                warmed.append(V6_MODEL_VERSION)
+                _log(f"prewarm {V6_MODEL_VERSION}: hazır ({ds}, satır={len(tr6)}, {time.monotonic() - t0:.1f}s)")
+                del bundle6
+            del tr6
+        except Exception as exc:
+            _log(f"HATA ({V6_MODEL_VERSION} prewarm): {exc}")
+        finally:
+            if v7_target is None and base_feat is not None:
+                del base_feat
+                base_feat = None
+                base_sig = None
+            gc.collect()
+
+    if v7_target is not None:
+        p7, k7, cfg7 = v7_target
+        t0 = time.monotonic()
+        feat_base = None
+        feat_v7 = None
+        try:
+            sig7 = _base_sig(cfg7)
+            if base_feat is not None and base_sig == sig7:
+                feat_base = base_feat
+                base_feat = None
+                base_sig = None
+            else:
+                base_feat = None
+                base_sig = None
+                feat_base = _build_v6_base_feat(df, tables, ds, cfg7, main_db=main_db)
+
+            v7_blocks = tuple(cfg7.get("v7_blocks") or ())
+            feat_v7 = attach_v7(feat_base, blocks=v7_blocks) if v7_blocks else feat_base
+            del feat_base
+            feat_base = None
+            gc.collect()
+
+            tr7 = _select_v6_train_df(feat_v7, ds, train_start, cfg7)
+            if tr7.empty or (tr7["finish"] == 1).nunique() < 2:
+                _log(f"UYARI ({V7_MODEL_VERSION} prewarm): eğitim verisi yetersiz (satır={len(tr7)})")
+            else:
+                bundle7 = _model_v7_mod.fit_v7_model_bundle(tr7, config=cfg7)
+                _model_v6_mod._save_v6_bundle_cache({"cache_key": k7, "bundle": bundle7}, p7)
+                warmed.append(V7_MODEL_VERSION)
+                _log(f"prewarm {V7_MODEL_VERSION}: hazır ({ds}, satır={len(tr7)}, {time.monotonic() - t0:.1f}s)")
+                del bundle7
+            del tr7
+        except Exception as exc:
+            _log(f"HATA ({V7_MODEL_VERSION} prewarm): {exc}")
+        finally:
+            base_feat = None
+            base_sig = None
+            if feat_base is not None:
+                del feat_base
+            if feat_v7 is not None:
+                del feat_v7
+            gc.collect()
+
+    del df, tables
+    gc.collect()
+    return warmed
 
 
 def _assign_fallback_prog_no(df_sub):
@@ -775,6 +1044,17 @@ def _compute_settled_metrics(eval_df, p_col):
     return float(by_race["ll"].mean()), float(by_race["top1"].mean())
 
 
+def _pairwise_spearman(df, mv_a, mv_b, label_a, label_b):
+    pa = df[f"p_{mv_a}"].to_numpy(dtype=np.float64)
+    pb = df[f"p_{mv_b}"].to_numpy(dtype=np.float64)
+    if len(pa) >= 2 and np.ptp(pa) > 0.0 and np.ptp(pb) > 0.0:
+        rho = float(spearmanr(pa, pb).statistic)
+        if not np.isfinite(rho):
+            raise RuntimeError(f"{label_a}↔{label_b} Spearman korelasyonu sonlu değil.")
+        return rho, False
+    return 0.0, True
+
+
 def run_backcheck(
     date_str,
     main_db="data/ganyan.db",
@@ -930,15 +1210,16 @@ def run_backcheck(
     spearman_rho = None
     spearman_const = False
     if MODEL_VERSION in active_models and V6_MODEL_VERSION in active_models:
-        p5 = gt_act[f"p_{MODEL_VERSION}"].to_numpy(dtype=np.float64)
-        p6 = gt_act[f"p_{V6_MODEL_VERSION}"].to_numpy(dtype=np.float64)
-        if len(p5) >= 2 and np.ptp(p5) > 0.0 and np.ptp(p6) > 0.0:
-            spearman_rho = float(spearmanr(p6, p5).statistic)
-            if not np.isfinite(spearman_rho):
-                raise RuntimeError("v6↔v5 Spearman korelasyonu sonlu değil.")
-        else:
-            spearman_rho = 0.0
-            spearman_const = True
+        spearman_rho, spearman_const = _pairwise_spearman(
+            gt_act, V6_MODEL_VERSION, MODEL_VERSION, "v6", "v5"
+        )
+
+    spearman_v7_v6 = None
+    spearman_v7_v6_const = False
+    if V7_MODEL_VERSION in active_models and V6_MODEL_VERSION in active_models:
+        spearman_v7_v6, spearman_v7_v6_const = _pairwise_spearman(
+            gt_act, V7_MODEL_VERSION, V6_MODEL_VERSION, "v7", "v6"
+        )
 
     _log(
         f"backcheck tarih={ds} kosu={n_races} kosucu={len(gt_act)} "
@@ -958,6 +1239,12 @@ def run_backcheck(
             f"  spearman({V6_MODEL_VERSION}, {MODEL_VERSION}) = {spearman_rho:.4f} (n={len(gt_act)}){const_note}",
             flush=True,
         )
+    if spearman_v7_v6 is not None:
+        const_note_v7 = " (sabit dizi)" if spearman_v7_v6_const else ""
+        print(
+            f"  spearman({V7_MODEL_VERSION}, {V6_MODEL_VERSION}) = {spearman_v7_v6:.4f} (n={len(gt_act)}){const_note_v7}",
+            flush=True,
+        )
     print("BACKCHECK OK", flush=True)
 
     return {
@@ -970,13 +1257,17 @@ def run_backcheck(
         "agf_top1": agf_top1,
         "models": model_metrics,
         "spearman_v6_v5": spearman_rho,
+        "spearman_v7_v6": spearman_v7_v6,
         "written_rows": written_out,
     }
 
 
 def build_arg_parser():
     ap = argparse.ArgumentParser(
-        description="Model v5 (v5_sgr_all) ve Model v6 (v6_e5) canlı koşu-öncesi tahmin yazıcı ve geriye dönük denetim."
+        description=(
+            "Model v5 (v5_sgr_all), Model v6 (v6_e5) ve Model v7 (v7_tcjp) "
+            "canlı koşu-öncesi tahmin yazıcı ve geriye dönük denetim."
+        )
     )
     ap.add_argument("--date", default=None, help="YYYY-MM-DD (varsayılan: İstanbul bugün)")
     ap.add_argument("--db", default="data/ganyan.db", help="Ana SQLite veritabanı yolu (salt-okunur okunur)")
@@ -988,18 +1279,23 @@ def build_arg_parser():
     ap.add_argument(
         "--models",
         default=",".join(DEFAULT_MODELS),
-        help="Virgüllü model sürümleri (varsayılan: v5_sgr_all,v6_e5)",
+        help="Virgüllü model sürümleri (varsayılan: v5_sgr_all,v6_e5,v7_tcjp)",
     )
     ap.add_argument(
         "--model-cache-dir",
         default=DEFAULT_MODEL_CACHE_DIR,
-        help="Günlük eğitilmiş V6 model önbellek dizini (varsayılan: data/forward_models)",
+        help="Günlük eğitilmiş V6/V7 model önbellek dizini (varsayılan: data/forward_models)",
     )
     ap.add_argument(
         "--backcheck",
         default=None,
         metavar="YYYY-MM-DD",
         help="Sonuçlanmış bir gün için geriye dönük gerçek-veri denetimi çalıştır",
+    )
+    ap.add_argument(
+        "--prewarm-models",
+        action="store_true",
+        help="Günün V6/V7 modellerini AGF beklemeden önden eğit ve önbelleğe al",
     )
     ap.add_argument("--train-start", default=DEFAULT_TRAIN_START, help="Eğitim başlangıç tarihi YYYY-MM-DD")
     ap.add_argument("--due-max-min", type=float, default=DEFAULT_DUE_MAX_MIN, help="Koşuya kalan azami dakika")
@@ -1028,6 +1324,21 @@ def main(argv=None):
         except Exception as exc:
             print(f"BACKCHECK HATA: {exc}", file=sys.stderr, flush=True)
             return 1
+        return 0
+
+    if args.prewarm_models:
+        try:
+            now_dt = _normalize_now(args.now)
+            ds = args.date or now_dt.date().isoformat()
+            prewarm_models(
+                date_str=ds,
+                main_db=args.db,
+                train_start=args.train_start,
+                models=args.models,
+                cache_dir=args.model_cache_dir,
+            )
+        except Exception as exc:
+            _log(f"UYARI: prewarm başarısız: {exc}")
         return 0
 
     live_out_db = args.out if args.out is not None else DEFAULT_OUT_DB
