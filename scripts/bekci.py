@@ -26,7 +26,7 @@ SLOTS = [
     (V6_CANLI, 13, 45),
     (V6_CANLI, 17, 34),
 ]
-LOOKBACK = dt.timedelta(hours=5)  # 3 oturum arası ~4 saat olduğundan 5 saat geriye bak
+LOOKBACK = dt.timedelta(hours=24)  # GitHub gündüz cron'ları atlasa bile akşam/gece kontrolü tüm günü denetlesin
 PRE = dt.timedelta(minutes=5)  # tetikten biraz önce başlayan çalışma da sayılır
 GRACE = dt.timedelta(minutes=20)  # tetikten sonra bu kadar içinde çalışma başlamış olmalı
 BUDGET_WARN_MIN = 1700  # aylık 2000 dk sınırına yaklaşma uyarısı
