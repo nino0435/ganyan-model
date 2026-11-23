@@ -216,3 +216,10 @@
 [20:56:05] v6_e5: 1 koşu için 10 tahmin yazıldı [Adana 21:00 (mtp=7.9m, S=80%, G=70%)]
 [21:26:35] v5_sgr_all: 1 koşu için 17 tahmin yazıldı [Adana 21:30 (mtp=7.4m, S=100%, G=88%)]
 [21:26:35] v6_e5: 1 koşu için 17 tahmin yazıldı [Adana 21:30 (mtp=7.4m, S=100%, G=88%)]
+[09:40:46] Günlük güncelleme başlıyor (2026-11-23)...
+[09:41:20] tjk güncellendi (2026-11-22 sonuç=16, 2026-11-23 koşu=17)
+[09:41:33] yenibeygir güncellendi (2026-11-21..2026-11-22: yeni_koşu=33, hız_dolu=330)
+[09:43:11] yenibeygir galop güncellendi (2026-11-22..2026-11-23: koşu=33 at=384 galop=3794 (yeni=3794) eşleşmeyen_at=0 hata=0)
+[09:49:45] prewarm v6_e5: hazır (2026-11-23, satır=635332, 368.1s)
+[09:57:05] prewarm v7_tcjp: hazır (2026-11-23, satır=635332, 439.7s)
+[10:06:12] prewarm v8_an: hazır (2026-11-23, satır=635332, 547.8s)
