@@ -1,4 +1,4 @@
-"""Forward-test comparison report (`v5_sgr_all` vs `v6_e5` vs `v7_tcjp` vs AGF) -> `reports/FORWARD_V5.md`."""
+"""Forward-test comparison report (`v6_e5` vs `v7_tcjp` vs `v8_an` vs AGF, with legacy `v5_sgr_all`) -> `reports/FORWARD_V5.md`."""
 import argparse
 import datetime
 import os
@@ -18,7 +18,8 @@ IST_TZ = ZoneInfo("Europe/Istanbul")
 V5_VERSION = "v5_sgr_all"
 V6_VERSION = "v6_e5"
 V7_VERSION = "v7_tcjp"
-TARGET_MODELS = (V5_VERSION, V6_VERSION, V7_VERSION)
+V8_VERSION = "v8_an"
+TARGET_MODELS = (V5_VERSION, V6_VERSION, V7_VERSION, V8_VERSION)
 SQL_CHUNK = 500
 
 
@@ -139,7 +140,7 @@ def _fmt_dll_ci(diff_arr):
 
 def _format_no_data_report(main_db, forward_db, reason, cov_rows=None):
     lines = [
-        "# Ganyan Model v5 / v6 / v7 — İleri Test (Forward) Karşılaştırma Raporu",
+        "# Ganyan Model v5 / v6 / v7 / v8 — İleri Test (Forward) Karşılaştırma Raporu",
         "",
         f"- **Ana Veritabanı:** `{main_db}` (salt-okunur)",
         f"- **İleri-Test Tahmin Veritabanı:** `{forward_db}` (salt-okunur)",
@@ -221,8 +222,51 @@ def _agg_common_metrics(m_dict, rids):
     }
 
 
+def _append_paired_comparison_tables(
+    lines,
+    rids,
+    methods,
+    pairs,
+    model_metrics_by_race,
+    agf_metrics_by_race,
+    ci_subheading=None,
+):
+    """Append summary table and paired ΔLL + 95% bootstrap CI table for `rids`."""
+    n_r = len(rids)
+    ll_by_method = {
+        "AGF": np.array([agf_metrics_by_race[r]["ll"] for r in rids], dtype=np.float64),
+    }
+    stats_by_method = {"AGF": _agg_common_metrics(agf_metrics_by_race, rids)}
+    for m in methods:
+        if m == "AGF":
+            continue
+        m_dict = model_metrics_by_race[m]
+        ll_by_method[m] = np.array([m_dict[r]["ll"] for r in rids], dtype=np.float64)
+        stats_by_method[m] = _agg_common_metrics(m_dict, rids)
+
+    lines += [
+        "| Yöntem | Koşu | Ort. Log-Loss | 1. Tercih İsabeti | İlk-2 İsabeti | İlk-3 İsabeti |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for m in methods:
+        st = stats_by_method[m]
+        lines.append(
+            f"| `{m}` | {n_r} | {st['ll']:.4f} | {st['top1']:.2%} | {st['top2']:.2%} | {st['top3']:.2%} |"
+        )
+    lines.append("")
+    if ci_subheading:
+        lines += [ci_subheading, ""]
+    lines += [
+        "| Karşılaştırma (Negatif = Sol Model Daha İyi) | Koşu | Eşli Ort. ΔLL | Bootstrap %95 GA |",
+        "|---|---:|---:|---|",
+    ]
+    for lhs, rhs in pairs:
+        m_str, ci_str = _fmt_dll_ci(ll_by_method[lhs] - ll_by_method[rhs])
+        lines.append(f"| `{lhs} − {rhs}` | {n_r} | {m_str} | {ci_str} |")
+
+
 def build_forward_v5_report(main_db="data/ganyan.db", forward_db="data/forward_v5.db"):
-    """Build Markdown comparison report for `v5_sgr_all`, `v6_e5`, `v7_tcjp`, and AGF on settled races."""
+    """Build Markdown comparison report for active (`v6_e5`, `v7_tcjp`, `v8_an`) + legacy (`v5_sgr_all`) vs AGF."""
     f_conn = _open_ro_db_if_exists(forward_db)
     if f_conn is None:
         return _format_no_data_report(main_db, forward_db, "Tahmin veritabanı bulunamadı")
@@ -469,6 +513,14 @@ def build_forward_v5_report(main_db="data/ganyan.db", forward_db="data/forward_v
             main_db, forward_db, "Modeller için değerlendirilebilir sonuçlanmış koşu yok", cov_rows=cov_rows
         )
 
+    common_active_rids = [
+        rid
+        for rid in valid_settled_rids
+        if rid in model_metrics_by_race.get(V6_VERSION, {})
+        and rid in model_metrics_by_race.get(V7_VERSION, {})
+        and rid in model_metrics_by_race.get(V8_VERSION, {})
+        and rid in agf_metrics_by_race
+    ]
     common_rids = [
         rid
         for rid in valid_settled_rids
@@ -485,8 +537,8 @@ def build_forward_v5_report(main_db="data/ganyan.db", forward_db="data/forward_v
         and rid in agf_metrics_by_race
     ]
 
-    # Summarize AGF sources across all evaluated settled races (common if non-empty, else union)
-    ref_agf_rids = common_rids if common_rids else sorted(agf_source_by_race)
+    # Summarize AGF sources across evaluated settled races (active + legacy union if non-empty)
+    ref_agf_rids = sorted(set(common_active_rids) | set(common_rids)) or sorted(agf_source_by_race)
     n_snap = sum(1 for r in ref_agf_rids if agf_source_by_race.get(r) == "agf_snapshots")
     n_close = sum(1 for r in ref_agf_rids if agf_source_by_race.get(r) == "agf_close")
     n_au = sum(1 for r in ref_agf_rids if agf_source_by_race.get(r) == "agf_used")
@@ -508,22 +560,53 @@ def build_forward_v5_report(main_db="data/ganyan.db", forward_db="data/forward_v
         )
 
     lines = [
-        "# Ganyan Model v5 / v6 / v7 — İleri Test (Forward) Karşılaştırma Raporu",
+        "# Ganyan Model v5 / v6 / v7 / v8 — İleri Test (Forward) Karşılaştırma Raporu",
         "",
-        "> **İstatistiksel Dürüstlük Uyarısı (Küçük Örneklem):** Küçük koşu sayılarında koşu-bazlı bootstrap %95 güven aralıkları (GA) doğal olarak **çok geniştir**; birkaç sürpriz kazanan log-loss farklarını kolayca bir yöne çekebilir. Tarihsel doğrulamada `v6_e5 − v5_sgr_all` farkı yaklaşık `-0.0027` nats, `v7_tcjp − v6_e5` farkı yaklaşık `-0.0019` nats mertebesindedir ve bu ölçekte bir farkın gürültüden ayrışması binlerce ileri-test koşusu gerektirir. Aşağıdaki tüm sayılar hiçbir biçimde güzelleştirilmeden ham haliyle verilmiştir.",
+        "> **İstatistiksel Dürüstlük Uyarısı (Küçük Örneklem):** Küçük koşu sayılarında koşu-bazlı bootstrap %95 güven aralıkları (GA) doğal olarak **çok geniştir**; birkaç sürpriz kazanan log-loss farklarını kolayca bir yöne çekebilir. Tarihsel doğrulamada `v6_e5 − v5_sgr_all` farkı yaklaşık `-0.0027` nats, `v7_tcjp − v6_e5` farkı yaklaşık `-0.0019` nats, `v8_an − v7_tcjp` farkı yaklaşık `-0.0027` nats mertebesindedir ve bu ölçekte farkların gürültüden ayrışması binlerce ileri-test koşusu gerektirir (`v5_sgr_all` yeni canlı üretimden emekli edilmiştir; tarihsel kayıtları arşivde korunmaktadır). Aşağıdaki tüm sayılar hiçbir biçimde güzelleştirilmeden ham haliyle verilmiştir.",
         "",
         "## 1. Veri ve AGF Kaynağı Özeti",
         "",
         f"- **Ana Veritabanı:** `{main_db}` (salt-okunur)",
         f"- **İleri-Test Tahmin Veritabanı:** `{forward_db}` (salt-okunur)",
+        f"- **Aktif Canlı Eşli Karşılaştırma Koşu Sayısı (`{V6_VERSION}` ∩ `{V7_VERSION}` ∩ `{V8_VERSION}` ∩ `AGF`):** `{len(common_active_rids)}`",
         f"- **Üçlü Eşli Karşılaştırma Koşu Sayısı (`{V5_VERSION}` ∩ `{V6_VERSION}` ∩ `AGF`):** `{len(common_rids)}`",
         f"- **Dörtlü Eşli Karşılaştırma Koşu Sayısı (`{V5_VERSION}` ∩ `{V6_VERSION}` ∩ `{V7_VERSION}` ∩ `AGF`):** `{len(common_v7_rids)}`",
         f"- **Kullanılan AGF Kaynağı:** {agf_src_desc}",
         "",
-        "## 2. Eşli Performans Karşılaştırması (`v5_sgr_all` vs `v6_e5` vs `AGF`)",
+        "## 2. Eşli Performans Karşılaştırması",
+        "",
+        f"### Aktif Canlı Karşılaştırma (`{V8_VERSION}` vs `{V7_VERSION}` vs `{V6_VERSION}` vs `AGF`)",
         "",
     ]
 
+    if not common_active_rids:
+        lines.append(
+            f"Ortak sonuçlanmış aktif canlı koşu sayısı `0` (`{V8_VERSION}` sonuçlanmış: "
+            f"`{len(model_metrics_by_race.get(V8_VERSION, {}))}`) — aktif üçlü eşli karşılaştırma için **yeterli veri yok**."
+        )
+    else:
+        _append_paired_comparison_tables(
+            lines,
+            common_active_rids,
+            methods=["AGF", V6_VERSION, V7_VERSION, V8_VERSION],
+            pairs=[
+                (V8_VERSION, V7_VERSION),
+                (V8_VERSION, V6_VERSION),
+                (V8_VERSION, "AGF"),
+                (V7_VERSION, V6_VERSION),
+                (V7_VERSION, "AGF"),
+                (V6_VERSION, "AGF"),
+            ],
+            model_metrics_by_race=model_metrics_by_race,
+            agf_metrics_by_race=agf_metrics_by_race,
+            ci_subheading="#### Aktif Canlı Eşli ΔLL ve Koşu-Bazlı Bootstrap %95 Güven Aralığı (2000 Tekrar, `seed=0`)",
+        )
+
+    lines += [
+        "",
+        f"### Tarihsel Arşiv (`{V5_VERSION}` vs `{V6_VERSION}` vs `AGF`)",
+        "",
+    ]
     if not common_rids:
         lines.append(
             f"Ortak sonuçlanmış koşu sayısı `0` (`{V5_VERSION}` sonuçlanmış: `{len(model_metrics_by_race.get(V5_VERSION, {}))}`, "
@@ -531,34 +614,19 @@ def build_forward_v5_report(main_db="data/ganyan.db", forward_db="data/forward_v
             "üçlü eşli karşılaştırma için **yeterli veri yok**."
         )
     else:
-        n_c = len(common_rids)
-        agf_ll = np.array([agf_metrics_by_race[r]["ll"] for r in common_rids], dtype=np.float64)
-        v5_ll = np.array([model_metrics_by_race[V5_VERSION][r]["ll"] for r in common_rids], dtype=np.float64)
-        v6_ll = np.array([model_metrics_by_race[V6_VERSION][r]["ll"] for r in common_rids], dtype=np.float64)
-
-        s_agf = _agg_common_metrics(agf_metrics_by_race, common_rids)
-        s_v5 = _agg_common_metrics(model_metrics_by_race[V5_VERSION], common_rids)
-        s_v6 = _agg_common_metrics(model_metrics_by_race[V6_VERSION], common_rids)
-
-        lines += [
-            "| Yöntem | Koşu | Ort. Log-Loss | 1. Tercih İsabeti | İlk-2 İsabeti | İlk-3 İsabeti |",
-            "|---|---:|---:|---:|---:|---:|",
-            f"| `AGF` | {n_c} | {s_agf['ll']:.4f} | {s_agf['top1']:.2%} | {s_agf['top2']:.2%} | {s_agf['top3']:.2%} |",
-            f"| `{V5_VERSION}` | {n_c} | {s_v5['ll']:.4f} | {s_v5['top1']:.2%} | {s_v5['top2']:.2%} | {s_v5['top3']:.2%} |",
-            f"| `{V6_VERSION}` | {n_c} | {s_v6['ll']:.4f} | {s_v6['top1']:.2%} | {s_v6['top2']:.2%} | {s_v6['top3']:.2%} |",
-            "",
-            "### Eşli ΔLL ve Koşu-Bazlı Bootstrap %95 Güven Aralığı (2000 Tekrar, `seed=0`)",
-            "",
-            "| Karşılaştırma (Negatif = Sol Model Daha İyi) | Koşu | Eşli Ort. ΔLL | Bootstrap %95 GA |",
-            "|---|---:|---:|---|",
-        ]
-        for pair_lbl, diff_vec in [
-            (f"`{V6_VERSION} − {V5_VERSION}`", v6_ll - v5_ll),
-            (f"`{V6_VERSION} − AGF`", v6_ll - agf_ll),
-            (f"`{V5_VERSION} − AGF`", v5_ll - agf_ll),
-        ]:
-            m_str, ci_str = _fmt_dll_ci(diff_vec)
-            lines.append(f"| {pair_lbl} | {n_c} | {m_str} | {ci_str} |")
+        _append_paired_comparison_tables(
+            lines,
+            common_rids,
+            methods=["AGF", V5_VERSION, V6_VERSION],
+            pairs=[
+                (V6_VERSION, V5_VERSION),
+                (V6_VERSION, "AGF"),
+                (V5_VERSION, "AGF"),
+            ],
+            model_metrics_by_race=model_metrics_by_race,
+            agf_metrics_by_race=agf_metrics_by_race,
+            ci_subheading="#### Eşli ΔLL ve Koşu-Bazlı Bootstrap %95 Güven Aralığı (2000 Tekrar, `seed=0`)",
+        )
 
     lines += [
         "",
@@ -571,35 +639,18 @@ def build_forward_v5_report(main_db="data/ganyan.db", forward_db="data/forward_v
             "dörtlü eşli karşılaştırma için **yeterli veri yok**."
         )
     else:
-        n_v7 = len(common_v7_rids)
-        agf_ll_7 = np.array([agf_metrics_by_race[r]["ll"] for r in common_v7_rids], dtype=np.float64)
-        v5_ll_7 = np.array([model_metrics_by_race[V5_VERSION][r]["ll"] for r in common_v7_rids], dtype=np.float64)
-        v6_ll_7 = np.array([model_metrics_by_race[V6_VERSION][r]["ll"] for r in common_v7_rids], dtype=np.float64)
-        v7_ll_7 = np.array([model_metrics_by_race[V7_VERSION][r]["ll"] for r in common_v7_rids], dtype=np.float64)
-
-        s_agf_7 = _agg_common_metrics(agf_metrics_by_race, common_v7_rids)
-        s_v5_7 = _agg_common_metrics(model_metrics_by_race[V5_VERSION], common_v7_rids)
-        s_v6_7 = _agg_common_metrics(model_metrics_by_race[V6_VERSION], common_v7_rids)
-        s_v7_7 = _agg_common_metrics(model_metrics_by_race[V7_VERSION], common_v7_rids)
-
-        lines += [
-            "| Yöntem | Koşu | Ort. Log-Loss | 1. Tercih İsabeti | İlk-2 İsabeti | İlk-3 İsabeti |",
-            "|---|---:|---:|---:|---:|---:|",
-            f"| `AGF` | {n_v7} | {s_agf_7['ll']:.4f} | {s_agf_7['top1']:.2%} | {s_agf_7['top2']:.2%} | {s_agf_7['top3']:.2%} |",
-            f"| `{V5_VERSION}` | {n_v7} | {s_v5_7['ll']:.4f} | {s_v5_7['top1']:.2%} | {s_v5_7['top2']:.2%} | {s_v5_7['top3']:.2%} |",
-            f"| `{V6_VERSION}` | {n_v7} | {s_v6_7['ll']:.4f} | {s_v6_7['top1']:.2%} | {s_v6_7['top2']:.2%} | {s_v6_7['top3']:.2%} |",
-            f"| `{V7_VERSION}` | {n_v7} | {s_v7_7['ll']:.4f} | {s_v7_7['top1']:.2%} | {s_v7_7['top2']:.2%} | {s_v7_7['top3']:.2%} |",
-            "",
-            "| Karşılaştırma (Negatif = Sol Model Daha İyi) | Koşu | Eşli Ort. ΔLL | Bootstrap %95 GA |",
-            "|---|---:|---:|---|",
-        ]
-        for pair_lbl, diff_vec in [
-            (f"`{V7_VERSION} − {V6_VERSION}`", v7_ll_7 - v6_ll_7),
-            (f"`{V7_VERSION} − {V5_VERSION}`", v7_ll_7 - v5_ll_7),
-            (f"`{V7_VERSION} − AGF`", v7_ll_7 - agf_ll_7),
-        ]:
-            m_str, ci_str = _fmt_dll_ci(diff_vec)
-            lines.append(f"| {pair_lbl} | {n_v7} | {m_str} | {ci_str} |")
+        _append_paired_comparison_tables(
+            lines,
+            common_v7_rids,
+            methods=["AGF", V5_VERSION, V6_VERSION, V7_VERSION],
+            pairs=[
+                (V7_VERSION, V6_VERSION),
+                (V7_VERSION, V5_VERSION),
+                (V7_VERSION, "AGF"),
+            ],
+            model_metrics_by_race=model_metrics_by_race,
+            agf_metrics_by_race=agf_metrics_by_race,
+        )
 
     lines += [
         "",
@@ -660,7 +711,7 @@ def forward_v5_report(
 
 def build_arg_parser():
     ap = argparse.ArgumentParser(
-        description="İleri-test karşılaştırma raporu: v5_sgr_all, v6_e5, v7_tcjp ve AGF -> reports/FORWARD_V5.md"
+        description="İleri-test karşılaştırma raporu: v6_e5, v7_tcjp, v8_an (+ v5_sgr_all arşivi) ve AGF -> reports/FORWARD_V5.md"
     )
     ap.add_argument("--db", default="data/ganyan.db", help="Ana SQLite veritabanı yolu (salt-okunur)")
     ap.add_argument(

@@ -1,6 +1,6 @@
 name: Ganyan V6 Canlı
 
-# Mac bağımsız V5 (v5_sgr_all) + V6 (v6_e5) + V7 (v7_tcjp) günlük güncelleme ve canlı koşu-öncesi tahmin döngüsü.
+# Mac bağımsız V6 (v6_e5) + V7 (v7_tcjp) + V8 (v8_an) günlük güncelleme ve canlı koşu-öncesi tahmin döngüsü (V5 emekli).
 # Cloud Scheduler günde 3 oturum tetikler (TR 09:40 -> 13:43, 13:45 -> 17:33, 17:34 -> 21:38).
 on:
   workflow_dispatch:
@@ -182,8 +182,10 @@ jobs:
           echo "[$(date '+%H:%M:%S')] Canlı döngü aktif (bitiş epoch=${END_EPOCH})" | tee -a state/forward_v5.log
           V6_MODEL_EXISTED=0
           V7_MODEL_EXISTED=0
+          V8_MODEL_EXISTED=0
           [ -s "data/forward_models/${TODAY}_v6_e5.pkl" ] && V6_MODEL_EXISTED=1
           [ -s "data/forward_models/${TODAY}_v7_tcjp.pkl" ] && V7_MODEL_EXISTED=1
+          [ -s "data/forward_models/${TODAY}_v8_an.pkl" ] && V8_MODEL_EXISTED=1
 
           while true; do
             BEFORE_N="$(pred_count)"
@@ -205,6 +207,10 @@ jobs:
             fi
             if [ "$V7_MODEL_EXISTED" = "0" ] && [ -s "data/forward_models/${TODAY}_v7_tcjp.pkl" ]; then
               V7_MODEL_EXISTED=1
+              NEED_BACKUP=1
+            fi
+            if [ "$V8_MODEL_EXISTED" = "0" ] && [ -s "data/forward_models/${TODAY}_v8_an.pkl" ]; then
+              V8_MODEL_EXISTED=1
               NEED_BACKUP=1
             fi
 

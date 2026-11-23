@@ -334,6 +334,7 @@ def test_prewarm_models_warms_v6_and_v7_without_agf_and_skips_when_warm(tmp_path
         date_str=target_date,
         main_db=str(main_db),
         train_start="2015-01-01",
+        models="v6_e5,v7_tcjp",
         cache_dir=str(cache_dir),
     )
     assert warmed_1 == ["v6_e5", "v7_tcjp"]
@@ -347,6 +348,7 @@ def test_prewarm_models_warms_v6_and_v7_without_agf_and_skips_when_warm(tmp_path
         date_str=target_date,
         main_db=str(main_db),
         train_start="2015-01-01",
+        models="v6_e5,v7_tcjp",
         cache_dir=str(cache_dir),
     )
     assert warmed_2 == []
@@ -417,9 +419,10 @@ def test_prewarm_models_warms_v6_and_v7_without_agf_and_skips_when_warm(tmp_path
         train_start="2015-01-01",
         due_max_min=8.0,
         do_snapshot=False,
+        models="v6_e5,v7_tcjp",
         cache_dir=str(cache_dir),
     )
-    assert written == 18
+    assert written == 12
     assert len(v7_calls) == 1
     assert len(v6_calls) == 2
 
