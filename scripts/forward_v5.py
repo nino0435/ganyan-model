@@ -1,4 +1,4 @@
-"""Live forward predictor and backcheck runner for Model v6 (`v6_e5`), v7 (`v7_tcjp`), and v8 (`v8_an`), with legacy `v5_sgr_all` support."""
+"""Live forward predictor and backcheck runner for Model v6 (`v6_e5`), v7 (`v7_tcjp`), v8 (`v8_an`), and v9 (`v9_kssb`), with legacy `v5_sgr_all` support."""
 import argparse
 import datetime
 import gc
@@ -18,17 +18,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ganyan import model_v6 as _model_v6_mod
 from ganyan import model_v7 as _model_v7_mod
 from ganyan import model_v8 as _model_v8_mod
+from ganyan import model_v9 as _model_v9_mod
 from ganyan.agf_check import agf_complete
 from ganyan.features import build_features
 from ganyan.features_v5 import attach_v5, load_v5_tables
 from ganyan.features_v7 import attach_v7
 from ganyan.features_v8 import attach_v8
+from ganyan.features_v9 import attach_v9
 from ganyan.live_odds import minutes_to_post
 from ganyan.model import fit_predict_df
 from ganyan.model_v5 import get_b1x_cols
 from ganyan.model_v6 import V6_LIVE_MODEL_VERSION, fit_predict_v6_live
 from ganyan.model_v7 import V7_LIVE_MODEL_VERSION, fit_predict_v7_live
 from ganyan.model_v8 import V8_LIVE_MODEL_VERSION, fit_predict_v8_live
+from ganyan.model_v9 import V9_LIVE_MODEL_VERSION, fit_predict_v9_live
 from scripts.snapshot_agf import snapshot_agf
 
 IST_TZ = ZoneInfo("Europe/Istanbul")
@@ -36,8 +39,15 @@ MODEL_VERSION = "v5_sgr_all"
 V6_MODEL_VERSION = V6_LIVE_MODEL_VERSION
 V7_MODEL_VERSION = V7_LIVE_MODEL_VERSION
 V8_MODEL_VERSION = V8_LIVE_MODEL_VERSION
-DEFAULT_MODELS = (V6_MODEL_VERSION, V7_MODEL_VERSION, V8_MODEL_VERSION)
-SUPPORTED_MODELS = (MODEL_VERSION, V6_MODEL_VERSION, V7_MODEL_VERSION, V8_MODEL_VERSION)
+V9_MODEL_VERSION = V9_LIVE_MODEL_VERSION
+DEFAULT_MODELS = (V6_MODEL_VERSION, V7_MODEL_VERSION, V8_MODEL_VERSION, V9_MODEL_VERSION)
+SUPPORTED_MODELS = (
+    MODEL_VERSION,
+    V6_MODEL_VERSION,
+    V7_MODEL_VERSION,
+    V8_MODEL_VERSION,
+    V9_MODEL_VERSION,
+)
 DEFAULT_OUT_DB = "data/forward_v5.db"
 DEFAULT_MODEL_CACHE_DIR = "data/forward_models"
 REF_END = "2017-01-01"
@@ -50,6 +60,8 @@ _ORIG_V7_CONFIG = _model_v7_mod.V7_CONFIG
 V7_CONFIG = _ORIG_V7_CONFIG
 _ORIG_V8_CONFIG = _model_v8_mod.V8_CONFIG
 V8_CONFIG = _ORIG_V8_CONFIG
+_ORIG_V9_CONFIG = _model_v9_mod.V9_CONFIG
+V9_CONFIG = _ORIG_V9_CONFIG
 
 PREDICTIONS_V5_SQL = """
 CREATE TABLE IF NOT EXISTS predictions_v5 (
@@ -88,6 +100,12 @@ def _resolve_live_v8_config():
     if V8_CONFIG is not _ORIG_V8_CONFIG:
         return V8_CONFIG
     return _model_v8_mod.V8_CONFIG
+
+
+def _resolve_live_v9_config():
+    if V9_CONFIG is not _ORIG_V9_CONFIG:
+        return V9_CONFIG
+    return _model_v9_mod.V9_CONFIG
 
 
 def _parse_models(models=None, model_version=None):
@@ -537,11 +555,25 @@ def _fit_predict_v8_from_feat(feat_df, ds, train_start, target_race_ids, v8_cfg,
     )
 
 
+def _fit_predict_v9_from_feat(feat_df, ds, train_start, target_race_ids, v9_cfg, cache_path=None):
+    """Exact `v9_kssb` training slice (`_has_race_win` + `require_agf`) and 5-seed + V9 gamma prediction."""
+    return _fit_predict_live_from_feat(
+        feat_df,
+        ds=ds,
+        train_start=train_start,
+        target_race_ids=target_race_ids,
+        cfg=v9_cfg,
+        model_version=V9_MODEL_VERSION,
+        live_fn=fit_predict_v9_live,
+        cache_path=cache_path,
+    )
+
+
 def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_dir=None, main_db=None):
     """Shared feature-building and model-prediction pipeline for both `run_once` and `run_backcheck`.
 
     Isolates errors per model so a failure in one model never blocks the others.
-    Shares base and V7 feature frames across models when signatures match, while
+    Shares base, V7, and V8 feature frames across models when signatures match, while
     freeing intermediate copies aggressively so peak memory stays <= ~5 GB (<< 12 GB).
     """
     preds_by_model = {}
@@ -551,21 +583,25 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
     need_v6 = bool(race_ids_by_model.get(V6_MODEL_VERSION))
     need_v7 = bool(race_ids_by_model.get(V7_MODEL_VERSION))
     need_v8 = bool(race_ids_by_model.get(V8_MODEL_VERSION))
+    need_v9 = bool(race_ids_by_model.get(V9_MODEL_VERSION))
     base_feat_cache = None
     base_sig_cache = None
     v7_feat_cache = None
     v7_sig_cache = None
+    v8_feat_cache = None
+    v8_sig_cache = None
 
     if need_v5:
         feat_v5 = None
         try:
             feat_v5 = build_features(df, ref_end=REF_END)
             feat_v5 = attach_v5(feat_v5, tables, blocks=("S", "G", "R"))
-            if need_v6 or need_v7 or need_v8:
+            if need_v6 or need_v7 or need_v8 or need_v9:
                 for peek_cfg in (
                     _resolve_live_v6_config() if need_v6 else None,
                     _resolve_live_v7_config() if need_v7 else None,
                     _resolve_live_v8_config() if need_v8 else None,
+                    _resolve_live_v9_config() if need_v9 else None,
                 ):
                     if peek_cfg is None:
                         continue
@@ -595,6 +631,7 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
 
     if need_v6:
         feat_v6 = None
+        need_after_v6 = need_v7 or need_v8 or need_v9
         try:
             v6_cfg = _resolve_live_v6_config()
             if v6_cfg is None:
@@ -606,10 +643,11 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
                 base_feat_cache = None
                 base_sig_cache = None
                 feat_v6 = _build_v6_base_feat(df, tables, ds, v6_cfg, main_db=main_db)
-                if need_v7 or need_v8:
+                if need_after_v6:
                     for peek_cfg in (
                         _resolve_live_v7_config() if need_v7 else None,
                         _resolve_live_v8_config() if need_v8 else None,
+                        _resolve_live_v9_config() if need_v9 else None,
                     ):
                         if peek_cfg is not None and _base_sig(peek_cfg) == sig_v6:
                             base_feat_cache = feat_v6
@@ -635,7 +673,7 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
             errors_by_model[V6_MODEL_VERSION] = exc
             _log(f"HATA ({V6_MODEL_VERSION}): {exc}")
         finally:
-            if not ((need_v7 or need_v8) and base_feat_cache is feat_v6):
+            if not (need_after_v6 and base_feat_cache is feat_v6):
                 if base_feat_cache is feat_v6:
                     base_feat_cache = None
                     base_sig_cache = None
@@ -646,27 +684,33 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
     if need_v7:
         feat_base = None
         feat_v7 = None
+        downstream_v7 = []
+        keep_base_downstream = False
         try:
             v7_cfg = _resolve_live_v7_config()
             if v7_cfg is None:
                 raise ValueError("V7_CONFIG tanımlı değil (None).")
             sig_v7 = _base_sig(v7_cfg)
             v7_blocks = tuple(v7_cfg.get("v7_blocks") or ())
-            v8_peek = _resolve_live_v8_config() if need_v8 else None
-            share_v7_for_v8 = bool(
-                v8_peek is not None
-                and (_base_sig(v8_peek), tuple(v8_peek.get("v7_blocks") or ())) == (sig_v7, v7_blocks)
+            for use, resolver in (
+                (need_v8, _resolve_live_v8_config),
+                (need_v9, _resolve_live_v9_config),
+            ):
+                if use:
+                    cfg_d = resolver()
+                    if cfg_d is not None:
+                        downstream_v7.append(cfg_d)
+            share_v7_downstream = any(
+                (_base_sig(c), tuple(c.get("v7_blocks") or ())) == (sig_v7, v7_blocks)
+                for c in downstream_v7
             )
-            keep_base_for_v8 = bool(
-                need_v8
-                and not share_v7_for_v8
-                and v8_peek is not None
-                and _base_sig(v8_peek) == sig_v7
+            keep_base_downstream = bool(
+                not share_v7_downstream and any(_base_sig(c) == sig_v7 for c in downstream_v7)
             )
 
             if base_feat_cache is not None and base_sig_cache == sig_v7:
                 feat_base = base_feat_cache
-                if not keep_base_for_v8:
+                if not keep_base_downstream:
                     base_feat_cache = None
                     base_sig_cache = None
             else:
@@ -678,7 +722,7 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
             feat_base = None
             gc.collect()
 
-            if share_v7_for_v8:
+            if share_v7_downstream:
                 v7_feat_cache = feat_v7
                 v7_sig_cache = (sig_v7, v7_blocks)
 
@@ -701,7 +745,7 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
             errors_by_model[V7_MODEL_VERSION] = exc
             _log(f"HATA ({V7_MODEL_VERSION}): {exc}")
         finally:
-            if not (need_v8 and base_feat_cache is not None and v7_feat_cache is None):
+            if not (downstream_v7 and keep_base_downstream and base_feat_cache is not None and v7_feat_cache is None):
                 base_feat_cache = None
                 base_sig_cache = None
             feat_base = None
@@ -713,6 +757,8 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
         feat_base_v8 = None
         feat_v7_v8 = None
         feat_v8 = None
+        keep_v7_for_v9 = False
+        keep_base_for_v9 = False
         try:
             v8_cfg = _resolve_live_v8_config()
             if v8_cfg is None:
@@ -721,19 +767,44 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
             v8_v7_blocks = tuple(v8_cfg.get("v7_blocks") or ())
             v8_blocks = tuple(v8_cfg.get("v8_blocks") or ())
 
+            v9_peek = _resolve_live_v9_config() if need_v9 else None
+            share_v8_for_v9 = bool(
+                v9_peek is not None
+                and (
+                    _base_sig(v9_peek),
+                    tuple(v9_peek.get("v7_blocks") or ()),
+                    tuple(v9_peek.get("v8_blocks") or ()),
+                )
+                == (sig_v8, v8_v7_blocks, v8_blocks)
+            )
+            keep_v7_for_v9 = bool(
+                not share_v8_for_v9
+                and v9_peek is not None
+                and (_base_sig(v9_peek), tuple(v9_peek.get("v7_blocks") or ())) == (sig_v8, v8_v7_blocks)
+            )
+            keep_base_for_v9 = bool(
+                not share_v8_for_v9
+                and not keep_v7_for_v9
+                and v9_peek is not None
+                and _base_sig(v9_peek) == sig_v8
+            )
+
             if v7_feat_cache is not None and v7_sig_cache == (sig_v8, v8_v7_blocks):
                 feat_v7_v8 = v7_feat_cache
-                v7_feat_cache = None
-                v7_sig_cache = None
-                base_feat_cache = None
-                base_sig_cache = None
+                if not keep_v7_for_v9:
+                    v7_feat_cache = None
+                    v7_sig_cache = None
+                if not keep_base_for_v9:
+                    base_feat_cache = None
+                    base_sig_cache = None
             else:
                 v7_feat_cache = None
                 v7_sig_cache = None
                 if base_feat_cache is not None and base_sig_cache == sig_v8:
                     feat_base_v8 = base_feat_cache
-                    base_feat_cache = None
-                    base_sig_cache = None
+                    if not keep_base_for_v9:
+                        base_feat_cache = None
+                        base_sig_cache = None
                 else:
                     base_feat_cache = None
                     base_sig_cache = None
@@ -742,10 +813,17 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
                 feat_v7_v8 = attach_v7(feat_base_v8, blocks=v8_v7_blocks) if v8_v7_blocks else feat_base_v8
                 feat_base_v8 = None
                 gc.collect()
+                if keep_v7_for_v9:
+                    v7_feat_cache = feat_v7_v8
+                    v7_sig_cache = (sig_v8, v8_v7_blocks)
 
             feat_v8 = attach_v8(feat_v7_v8, blocks=v8_blocks) if v8_blocks else feat_v7_v8
             feat_v7_v8 = None
             gc.collect()
+
+            if share_v8_for_v9:
+                v8_feat_cache = feat_v8
+                v8_sig_cache = (sig_v8, v8_v7_blocks, v8_blocks)
 
             c_path = (
                 os.path.join(str(cache_dir), f"{ds}_{V8_MODEL_VERSION}.pkl")
@@ -766,14 +844,107 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
             errors_by_model[V8_MODEL_VERSION] = exc
             _log(f"HATA ({V8_MODEL_VERSION}): {exc}")
         finally:
+            if not (need_v9 and keep_v7_for_v9 and v8_feat_cache is None):
+                v7_feat_cache = None
+                v7_sig_cache = None
+            if not (need_v9 and keep_base_for_v9 and v8_feat_cache is None and v7_feat_cache is None):
+                base_feat_cache = None
+                base_sig_cache = None
+            feat_base_v8 = None
+            feat_v7_v8 = None
+            if feat_v8 is not None and v8_feat_cache is not feat_v8:
+                del feat_v8
+            gc.collect()
+
+    if need_v9:
+        feat_base_v9 = None
+        feat_v7_v9 = None
+        feat_v8_v9 = None
+        feat_v9 = None
+        try:
+            v9_cfg = _resolve_live_v9_config()
+            if v9_cfg is None:
+                raise ValueError("V9_CONFIG tanımlı değil (None).")
+            sig_v9 = _base_sig(v9_cfg)
+            v9_v7_blocks = tuple(v9_cfg.get("v7_blocks") or ())
+            v9_v8_blocks = tuple(v9_cfg.get("v8_blocks") or ())
+            v9_blocks = tuple(v9_cfg.get("v9_blocks") or ())
+
+            if v8_feat_cache is not None and v8_sig_cache == (sig_v9, v9_v7_blocks, v9_v8_blocks):
+                feat_v8_v9 = v8_feat_cache
+                v8_feat_cache = None
+                v8_sig_cache = None
+                v7_feat_cache = None
+                v7_sig_cache = None
+                base_feat_cache = None
+                base_sig_cache = None
+            else:
+                v8_feat_cache = None
+                v8_sig_cache = None
+                if v7_feat_cache is not None and v7_sig_cache == (sig_v9, v9_v7_blocks):
+                    feat_v7_v9 = v7_feat_cache
+                    v7_feat_cache = None
+                    v7_sig_cache = None
+                    base_feat_cache = None
+                    base_sig_cache = None
+                else:
+                    v7_feat_cache = None
+                    v7_sig_cache = None
+                    if base_feat_cache is not None and base_sig_cache == sig_v9:
+                        feat_base_v9 = base_feat_cache
+                        base_feat_cache = None
+                        base_sig_cache = None
+                    else:
+                        base_feat_cache = None
+                        base_sig_cache = None
+                        feat_base_v9 = _build_v6_base_feat(df, tables, ds, v9_cfg, main_db=main_db)
+
+                    feat_v7_v9 = attach_v7(feat_base_v9, blocks=v9_v7_blocks) if v9_v7_blocks else feat_base_v9
+                    feat_base_v9 = None
+                    gc.collect()
+
+                feat_v8_v9 = attach_v8(feat_v7_v9, blocks=v9_v8_blocks) if v9_v8_blocks else feat_v7_v9
+                feat_v7_v9 = None
+                gc.collect()
+
+            feat_v9 = (
+                attach_v9(feat_v8_v9, blocks=v9_blocks, v5_tables=tables)
+                if v9_blocks
+                else feat_v8_v9
+            )
+            feat_v8_v9 = None
+            gc.collect()
+
+            c_path = (
+                os.path.join(str(cache_dir), f"{ds}_{V9_MODEL_VERSION}.pkl")
+                if cache_dir
+                else None
+            )
+            pred_v9 = _fit_predict_v9_from_feat(
+                feat_v9,
+                ds=ds,
+                train_start=train_start,
+                target_race_ids=race_ids_by_model[V9_MODEL_VERSION],
+                v9_cfg=v9_cfg,
+                cache_path=c_path,
+            )
+            if pred_v9 is not None and not pred_v9.empty:
+                preds_by_model[V9_MODEL_VERSION] = pred_v9
+        except Exception as exc:
+            errors_by_model[V9_MODEL_VERSION] = exc
+            _log(f"HATA ({V9_MODEL_VERSION}): {exc}")
+        finally:
             base_feat_cache = None
             base_sig_cache = None
             v7_feat_cache = None
             v7_sig_cache = None
-            feat_base_v8 = None
-            feat_v7_v8 = None
-            if feat_v8 is not None:
-                del feat_v8
+            v8_feat_cache = None
+            v8_sig_cache = None
+            feat_base_v9 = None
+            feat_v7_v9 = None
+            feat_v8_v9 = None
+            if feat_v9 is not None:
+                del feat_v9
             gc.collect()
 
     return preds_by_model, errors_by_model
@@ -786,7 +957,7 @@ def prewarm_models(
     models=None,
     cache_dir=DEFAULT_MODEL_CACHE_DIR,
 ):
-    """Pre-train and cache daily V6/V7/V8 model bundles for `date_str` without waiting for live AGF."""
+    """Pre-train and cache daily V6/V7/V8/V9 model bundles for `date_str` without waiting for live AGF."""
     active_models = _parse_models(models=models)
     ds = str(date_str)[:10] if date_str is not None else datetime.datetime.now(IST_TZ).date().isoformat()
     if not os.path.exists(str(main_db)):
@@ -796,6 +967,7 @@ def prewarm_models(
     v6_cfg = _resolve_live_v6_config() if V6_MODEL_VERSION in active_models else None
     v7_cfg = _resolve_live_v7_config() if V7_MODEL_VERSION in active_models else None
     v8_cfg = _resolve_live_v8_config() if V8_MODEL_VERSION in active_models else None
+    v9_cfg = _resolve_live_v9_config() if V9_MODEL_VERSION in active_models else None
 
     v6_target = None
     if V6_MODEL_VERSION in active_models:
@@ -827,7 +999,17 @@ def prewarm_models(
             if _model_v6_mod._load_v6_bundle_cache(p8, k8) is None:
                 v8_target = (p8, k8, v8_cfg)
 
-    if v6_target is None and v7_target is None and v8_target is None:
+    v9_target = None
+    if V9_MODEL_VERSION in active_models:
+        if v9_cfg is None:
+            _log(f"UYARI ({V9_MODEL_VERSION}): V9_CONFIG tanımlı değil (None).")
+        else:
+            p9 = os.path.join(str(cache_dir), f"{ds}_{V9_MODEL_VERSION}.pkl")
+            k9 = _model_v9_mod.build_v9_cache_key(ds, str(train_start), config=v9_cfg)
+            if _model_v6_mod._load_v6_bundle_cache(p9, k9) is None:
+                v9_target = (p9, k9, v9_cfg)
+
+    if v6_target is None and v7_target is None and v8_target is None and v9_target is None:
         _log(f"prewarm: önbellek zaten hazır ({ds})")
         return []
 
@@ -849,6 +1031,8 @@ def prewarm_models(
     base_sig = None
     v7_feat = None
     v7_sig = None
+    v8_feat = None
+    v8_sig = None
 
     if v6_target is not None:
         p6, k6, cfg6 = v6_target
@@ -869,7 +1053,7 @@ def prewarm_models(
         except Exception as exc:
             _log(f"HATA ({V6_MODEL_VERSION} prewarm): {exc}")
         finally:
-            if v7_target is None and v8_target is None and base_feat is not None:
+            if v7_target is None and v8_target is None and v9_target is None and base_feat is not None:
                 del base_feat
                 base_feat = None
                 base_sig = None
@@ -880,21 +1064,21 @@ def prewarm_models(
         t0 = time.monotonic()
         feat_base = None
         feat_v7 = None
+        downstream_v7 = [t[2] for t in (v8_target, v9_target) if t is not None]
+        keep_base_downstream = False
         try:
             sig7 = _base_sig(cfg7)
             v7_blocks = tuple(cfg7.get("v7_blocks") or ())
-            share_v7_for_v8 = bool(
-                v8_target is not None
-                and (_base_sig(v8_target[2]), tuple(v8_target[2].get("v7_blocks") or ())) == (sig7, v7_blocks)
+            share_v7_downstream = any(
+                (_base_sig(c), tuple(c.get("v7_blocks") or ())) == (sig7, v7_blocks)
+                for c in downstream_v7
             )
-            keep_base_for_v8 = bool(
-                v8_target is not None
-                and not share_v7_for_v8
-                and _base_sig(v8_target[2]) == sig7
+            keep_base_downstream = bool(
+                not share_v7_downstream and any(_base_sig(c) == sig7 for c in downstream_v7)
             )
             if base_feat is not None and base_sig == sig7:
                 feat_base = base_feat
-                if not keep_base_for_v8:
+                if not keep_base_downstream:
                     base_feat = None
                     base_sig = None
             else:
@@ -906,7 +1090,7 @@ def prewarm_models(
             feat_base = None
             gc.collect()
 
-            if share_v7_for_v8:
+            if share_v7_downstream:
                 v7_feat = feat_v7
                 v7_sig = (sig7, v7_blocks)
 
@@ -923,7 +1107,7 @@ def prewarm_models(
         except Exception as exc:
             _log(f"HATA ({V7_MODEL_VERSION} prewarm): {exc}")
         finally:
-            if not (v8_target is not None and base_feat is not None and v7_feat is None):
+            if not (downstream_v7 and keep_base_downstream and base_feat is not None and v7_feat is None):
                 base_feat = None
                 base_sig = None
             feat_base = None
@@ -937,24 +1121,51 @@ def prewarm_models(
         feat_base_v8 = None
         feat_v7_v8 = None
         feat_v8 = None
+        keep_v7_for_v9 = False
+        keep_base_for_v9 = False
         try:
             sig8 = _base_sig(cfg8)
             v8_v7_blocks = tuple(cfg8.get("v7_blocks") or ())
             v8_blocks = tuple(cfg8.get("v8_blocks") or ())
 
+            cfg9_peek = v9_target[2] if v9_target is not None else None
+            share_v8_for_v9 = bool(
+                cfg9_peek is not None
+                and (
+                    _base_sig(cfg9_peek),
+                    tuple(cfg9_peek.get("v7_blocks") or ()),
+                    tuple(cfg9_peek.get("v8_blocks") or ()),
+                )
+                == (sig8, v8_v7_blocks, v8_blocks)
+            )
+            keep_v7_for_v9 = bool(
+                not share_v8_for_v9
+                and cfg9_peek is not None
+                and (_base_sig(cfg9_peek), tuple(cfg9_peek.get("v7_blocks") or ())) == (sig8, v8_v7_blocks)
+            )
+            keep_base_for_v9 = bool(
+                not share_v8_for_v9
+                and not keep_v7_for_v9
+                and cfg9_peek is not None
+                and _base_sig(cfg9_peek) == sig8
+            )
+
             if v7_feat is not None and v7_sig == (sig8, v8_v7_blocks):
                 feat_v7_v8 = v7_feat
-                v7_feat = None
-                v7_sig = None
-                base_feat = None
-                base_sig = None
+                if not keep_v7_for_v9:
+                    v7_feat = None
+                    v7_sig = None
+                if not keep_base_for_v9:
+                    base_feat = None
+                    base_sig = None
             else:
                 v7_feat = None
                 v7_sig = None
                 if base_feat is not None and base_sig == sig8:
                     feat_base_v8 = base_feat
-                    base_feat = None
-                    base_sig = None
+                    if not keep_base_for_v9:
+                        base_feat = None
+                        base_sig = None
                 else:
                     base_feat = None
                     base_sig = None
@@ -963,10 +1174,17 @@ def prewarm_models(
                 feat_v7_v8 = attach_v7(feat_base_v8, blocks=v8_v7_blocks) if v8_v7_blocks else feat_base_v8
                 feat_base_v8 = None
                 gc.collect()
+                if keep_v7_for_v9:
+                    v7_feat = feat_v7_v8
+                    v7_sig = (sig8, v8_v7_blocks)
 
             feat_v8 = attach_v8(feat_v7_v8, blocks=v8_blocks) if v8_blocks else feat_v7_v8
             feat_v7_v8 = None
             gc.collect()
+
+            if share_v8_for_v9:
+                v8_feat = feat_v8
+                v8_sig = (sig8, v8_v7_blocks, v8_blocks)
 
             tr8 = _select_v6_train_df(feat_v8, ds, train_start, cfg8)
             if tr8.empty or (tr8["finish"] == 1).nunique() < 2:
@@ -981,14 +1199,100 @@ def prewarm_models(
         except Exception as exc:
             _log(f"HATA ({V8_MODEL_VERSION} prewarm): {exc}")
         finally:
+            if not (v9_target is not None and keep_v7_for_v9 and v8_feat is None):
+                v7_feat = None
+                v7_sig = None
+            if not (v9_target is not None and keep_base_for_v9 and v8_feat is None and v7_feat is None):
+                base_feat = None
+                base_sig = None
+            feat_base_v8 = None
+            feat_v7_v8 = None
+            if feat_v8 is not None and v8_feat is not feat_v8:
+                del feat_v8
+            gc.collect()
+
+    if v9_target is not None:
+        p9, k9, cfg9 = v9_target
+        t0 = time.monotonic()
+        feat_base_v9 = None
+        feat_v7_v9 = None
+        feat_v8_v9 = None
+        feat_v9 = None
+        try:
+            sig9 = _base_sig(cfg9)
+            v9_v7_blocks = tuple(cfg9.get("v7_blocks") or ())
+            v9_v8_blocks = tuple(cfg9.get("v8_blocks") or ())
+            v9_blocks = tuple(cfg9.get("v9_blocks") or ())
+
+            if v8_feat is not None and v8_sig == (sig9, v9_v7_blocks, v9_v8_blocks):
+                feat_v8_v9 = v8_feat
+                v8_feat = None
+                v8_sig = None
+                v7_feat = None
+                v7_sig = None
+                base_feat = None
+                base_sig = None
+            else:
+                v8_feat = None
+                v8_sig = None
+                if v7_feat is not None and v7_sig == (sig9, v9_v7_blocks):
+                    feat_v7_v9 = v7_feat
+                    v7_feat = None
+                    v7_sig = None
+                    base_feat = None
+                    base_sig = None
+                else:
+                    v7_feat = None
+                    v7_sig = None
+                    if base_feat is not None and base_sig == sig9:
+                        feat_base_v9 = base_feat
+                        base_feat = None
+                        base_sig = None
+                    else:
+                        base_feat = None
+                        base_sig = None
+                        feat_base_v9 = _build_v6_base_feat(df, tables, ds, cfg9, main_db=main_db)
+
+                    feat_v7_v9 = attach_v7(feat_base_v9, blocks=v9_v7_blocks) if v9_v7_blocks else feat_base_v9
+                    feat_base_v9 = None
+                    gc.collect()
+
+                feat_v8_v9 = attach_v8(feat_v7_v9, blocks=v9_v8_blocks) if v9_v8_blocks else feat_v7_v9
+                feat_v7_v9 = None
+                gc.collect()
+
+            feat_v9 = (
+                attach_v9(feat_v8_v9, blocks=v9_blocks, v5_tables=tables)
+                if v9_blocks
+                else feat_v8_v9
+            )
+            feat_v8_v9 = None
+            gc.collect()
+
+            tr9 = _select_v6_train_df(feat_v9, ds, train_start, cfg9)
+            if tr9.empty or (tr9["finish"] == 1).nunique() < 2:
+                _log(f"UYARI ({V9_MODEL_VERSION} prewarm): eğitim verisi yetersiz (satır={len(tr9)})")
+            else:
+                bundle9 = _model_v9_mod.fit_v9_model_bundle(tr9, config=cfg9)
+                _model_v6_mod._save_v6_bundle_cache({"cache_key": k9, "bundle": bundle9}, p9)
+                warmed.append(V9_MODEL_VERSION)
+                _log(f"prewarm {V9_MODEL_VERSION}: hazır ({ds}, satır={len(tr9)}, {time.monotonic() - t0:.1f}s)")
+                del bundle9
+            del tr9
+        except Exception as exc:
+            _log(f"HATA ({V9_MODEL_VERSION} prewarm): {exc}")
+        finally:
             base_feat = None
             base_sig = None
             v7_feat = None
             v7_sig = None
-            feat_base_v8 = None
-            feat_v7_v8 = None
-            if feat_v8 is not None:
-                del feat_v8
+            v8_feat = None
+            v8_sig = None
+            feat_base_v9 = None
+            feat_v7_v9 = None
+            feat_v8_v9 = None
+            if feat_v9 is not None:
+                del feat_v9
             gc.collect()
 
     del df, tables
@@ -1428,6 +1732,13 @@ def run_backcheck(
             gt_act, V8_MODEL_VERSION, V7_MODEL_VERSION, "v8", "v7"
         )
 
+    spearman_v9_v8 = None
+    spearman_v9_v8_const = False
+    if V9_MODEL_VERSION in active_models and V8_MODEL_VERSION in active_models:
+        spearman_v9_v8, spearman_v9_v8_const = _pairwise_spearman(
+            gt_act, V9_MODEL_VERSION, V8_MODEL_VERSION, "v9", "v8"
+        )
+
     _log(
         f"backcheck tarih={ds} kosu={n_races} kosucu={len(gt_act)} "
         f"atlanan_sonuclanmamis={skipped_unfinished} atlanan_agfsiz={skipped_no_agf}"
@@ -1458,6 +1769,12 @@ def run_backcheck(
             f"  spearman({V8_MODEL_VERSION}, {V7_MODEL_VERSION}) = {spearman_v8_v7:.4f} (n={len(gt_act)}){const_note_v8}",
             flush=True,
         )
+    if spearman_v9_v8 is not None:
+        const_note_v9 = " (sabit dizi)" if spearman_v9_v8_const else ""
+        print(
+            f"  spearman({V9_MODEL_VERSION}, {V8_MODEL_VERSION}) = {spearman_v9_v8:.4f} (n={len(gt_act)}){const_note_v9}",
+            flush=True,
+        )
     print("BACKCHECK OK", flush=True)
 
     return {
@@ -1472,6 +1789,7 @@ def run_backcheck(
         "spearman_v6_v5": spearman_rho,
         "spearman_v7_v6": spearman_v7_v6,
         "spearman_v8_v7": spearman_v8_v7,
+        "spearman_v9_v8": spearman_v9_v8,
         "written_rows": written_out,
     }
 
@@ -1479,7 +1797,7 @@ def run_backcheck(
 def build_arg_parser():
     ap = argparse.ArgumentParser(
         description=(
-            "Model v6 (v6_e5), Model v7 (v7_tcjp) ve Model v8 (v8_an) "
+            "Model v6 (v6_e5), Model v7 (v7_tcjp), Model v8 (v8_an) ve Model v9 (v9_kssb) "
             "canlı koşu-öncesi tahmin yazıcı ve geriye dönük denetim (v5_sgr_all emekli; "
             "--models ile hâlâ seçilebilir)."
         )
@@ -1494,12 +1812,12 @@ def build_arg_parser():
     ap.add_argument(
         "--models",
         default=",".join(DEFAULT_MODELS),
-        help="Virgüllü model sürümleri (varsayılan: v6_e5,v7_tcjp,v8_an)",
+        help="Virgüllü model sürümleri (varsayılan: v6_e5,v7_tcjp,v8_an,v9_kssb)",
     )
     ap.add_argument(
         "--model-cache-dir",
         default=DEFAULT_MODEL_CACHE_DIR,
-        help="Günlük eğitilmiş V6/V7/V8 model önbellek dizini (varsayılan: data/forward_models)",
+        help="Günlük eğitilmiş V6/V7/V8/V9 model önbellek dizini (varsayılan: data/forward_models)",
     )
     ap.add_argument(
         "--backcheck",
@@ -1510,7 +1828,7 @@ def build_arg_parser():
     ap.add_argument(
         "--prewarm-models",
         action="store_true",
-        help="Günün V6/V7/V8 modellerini AGF beklemeden önden eğit ve önbelleğe al",
+        help="Günün V6/V7/V8/V9 modellerini AGF beklemeden önden eğit ve önbelleğe al",
     )
     ap.add_argument("--train-start", default=DEFAULT_TRAIN_START, help="Eğitim başlangıç tarihi YYYY-MM-DD")
     ap.add_argument("--due-max-min", type=float, default=DEFAULT_DUE_MAX_MIN, help="Koşuya kalan azami dakika")
