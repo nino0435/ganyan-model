@@ -546,9 +546,13 @@ def test_forward_v5_report_active_v6_v7_v8_without_v5_and_with_legacy_archive(tm
     )
     md = rep_out.read_text(encoding="utf-8")
 
-    # V8 era has 4 settled races (without v5!), while legacy archive has 2 races and V9 quad has 0
+    # V8 era has 4 settled races (without v5!), while legacy archive has 2 races and active V10 / V9 quads have 0
     assert (
         "Aktif Canlı Eşli Karşılaştırma Koşu Sayısı "
+        "(`v7_tcjp` ∩ `v8_an` ∩ `v9_kssb` ∩ `v10_hlb` ∩ `AGF`):** `0`"
+    ) in md
+    assert (
+        "V9 Dönemi Eşli Karşılaştırma Koşu Sayısı "
         "(`v6_e5` ∩ `v7_tcjp` ∩ `v8_an` ∩ `v9_kssb` ∩ `AGF`):** `0`"
     ) in md
     assert "V8 Dönemi Eşli Karşılaştırma Koşu Sayısı (`v6_e5` ∩ `v7_tcjp` ∩ `v8_an` ∩ `AGF`):** `4`" in md

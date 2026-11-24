@@ -352,11 +352,12 @@ def test_prewarm_models_warms_active_quad_without_agf_and_skips_when_warm(tmp_pa
     monkeypatch.setattr(model_v8, "fit_v8_model_bundle", _spy_v8)
     monkeypatch.setattr(model_v9, "fit_v9_model_bundle", _spy_v9)
 
-    # 1) Cold prewarm even BEFORE today's program/AGF exists -> warms active quad (v6_e5, v7_tcjp, v8_an, v9_kssb)
+    # 1) Cold prewarm even BEFORE today's program/AGF exists -> explicitly warms V9-era quad (v6_e5, v7_tcjp, v8_an, v9_kssb)
     warmed_1 = forward_v5.prewarm_models(
         date_str=target_date,
         main_db=str(main_db),
         train_start="2015-01-01",
+        models="v6_e5,v7_tcjp,v8_an,v9_kssb",
         cache_dir=str(cache_dir),
     )
     assert warmed_1 == ["v6_e5", "v7_tcjp", "v8_an", "v9_kssb"]
@@ -374,6 +375,7 @@ def test_prewarm_models_warms_active_quad_without_agf_and_skips_when_warm(tmp_pa
         date_str=target_date,
         main_db=str(main_db),
         train_start="2015-01-01",
+        models="v6_e5,v7_tcjp,v8_an,v9_kssb",
         cache_dir=str(cache_dir),
     )
     assert warmed_2 == []
@@ -446,6 +448,7 @@ def test_prewarm_models_warms_active_quad_without_agf_and_skips_when_warm(tmp_pa
         train_start="2015-01-01",
         due_max_min=8.0,
         do_snapshot=False,
+        models="v6_e5,v7_tcjp,v8_an,v9_kssb",
         cache_dir=str(cache_dir),
     )
     assert written == 24
@@ -574,9 +577,13 @@ def test_forward_v5_report_active_quad_v8_transition_and_legacy_archive(tmp_path
     )
     md = rep_out.read_text(encoding="utf-8")
 
-    # Active V9 quad has 4 settled races, V8 transition era has 6 (races 3..8), legacy archive has 2
+    # V9 era quad has 4 settled races, V8 transition era has 6 (races 3..8), legacy archive has 2, active V10 quad has 0
     assert (
         "Aktif Canlı Eşli Karşılaştırma Koşu Sayısı "
+        "(`v7_tcjp` ∩ `v8_an` ∩ `v9_kssb` ∩ `v10_hlb` ∩ `AGF`):** `0`"
+    ) in md
+    assert (
+        "V9 Dönemi Eşli Karşılaştırma Koşu Sayısı "
         "(`v6_e5` ∩ `v7_tcjp` ∩ `v8_an` ∩ `v9_kssb` ∩ `AGF`):** `4`"
     ) in md
     assert "V8 Dönemi Eşli Karşılaştırma Koşu Sayısı (`v6_e5` ∩ `v7_tcjp` ∩ `v8_an` ∩ `AGF`):** `6`" in md

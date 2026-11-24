@@ -12,7 +12,7 @@ import pytest
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
-from ganyan import model_v6, model_v7, model_v8, model_v9
+from ganyan import model_v6, model_v7, model_v8, model_v9, model_v10
 from ganyan.db import init_db, upsert_program, upsert_results
 from scripts import daily_v5_update, forward_v5, forward_v5_report
 
@@ -260,10 +260,11 @@ def test_run_once_end_to_end_synthetic_db(tmp_path, monkeypatch):
     )
     assert written_1 == 24
     assert snap_calls == [(target_date, ["Ankara"])]
-    assert (cache_dir / f"{target_date}_v6_e5.pkl").exists()
+    assert not (cache_dir / f"{target_date}_v6_e5.pkl").exists()
     assert (cache_dir / f"{target_date}_v7_tcjp.pkl").exists()
     assert (cache_dir / f"{target_date}_v8_an.pkl").exists()
     assert (cache_dir / f"{target_date}_v9_kssb.pkl").exists()
+    assert (cache_dir / f"{target_date}_v10_hlb.pkl").exists()
 
     # Main DB predictions table must remain completely untouched
     mconn = sqlite3.connect(str(main_db))
@@ -284,8 +285,8 @@ def test_run_once_end_to_end_synthetic_db(tmp_path, monkeypatch):
             """
         ).fetchall()
         assert len(rows) == 24
-        assert {r[2] for r in rows} == {"v6_e5", "v7_tcjp", "v8_an", "v9_kssb"}
-        for mv in ("v6_e5", "v7_tcjp", "v8_an", "v9_kssb"):
+        assert {r[2] for r in rows} == {"v7_tcjp", "v8_an", "v9_kssb", "v10_hlb"}
+        for mv in ("v7_tcjp", "v8_an", "v9_kssb", "v10_hlb"):
             mv_rows = [r for r in rows if r[2] == mv]
             assert len(mv_rows) == 6
             assert [r[0] for r in mv_rows] == [rid_due] * 6
@@ -455,19 +456,19 @@ def test_run_once_partial_recovery_and_error_isolation(tmp_path, monkeypatch, ca
     _setup_three_due_races_db(main_db, target_date=target_date)
     cache_dir = tmp_path / "cache_iso"
 
-    # (a) Partial recovery: if only v6_e5 was written earlier, next default pass writes ONLY v7_tcjp + v8_an + v9_kssb;
-    #     explicitly requesting retired v5_sgr_all still works for legacy support.
+    # (a) Partial recovery: if only v7_tcjp was written earlier, next default pass writes ONLY v8_an + v9_kssb + v10_hlb;
+    #     explicitly requesting retired v5_sgr_all or v6_e5 still works for legacy support.
     out_partial = tmp_path / "partial.db"
-    w_v6_only = forward_v5.run_once(
+    w_v7_only = forward_v5.run_once(
         now="2026-04-20T13:55:00+03:00",
         date_str=target_date,
         main_db=str(main_db),
         out_db=str(out_partial),
         do_snapshot=False,
-        models="v6_e5",
+        models="v7_tcjp",
         cache_dir=str(cache_dir),
     )
-    assert w_v6_only == 6
+    assert w_v7_only == 6
 
     w_backfill_rest = forward_v5.run_once(
         now="2026-04-20T13:56:00+03:00",
@@ -486,7 +487,7 @@ def test_run_once_partial_recovery_and_error_isolation(tmp_path, monkeypatch, ca
                 "SELECT model_version, COUNT(*) FROM predictions_v5 GROUP BY model_version"
             ).fetchall()
         )
-        assert counts == {"v6_e5": 6, "v7_tcjp": 6, "v8_an": 6, "v9_kssb": 6}
+        assert counts == {"v7_tcjp": 6, "v8_an": 6, "v9_kssb": 6, "v10_hlb": 6}
     finally:
         pconn.close()
 
@@ -501,34 +502,18 @@ def test_run_once_partial_recovery_and_error_isolation(tmp_path, monkeypatch, ca
     )
     assert w_legacy_v5 == 6
 
-    # (b) v6_e5 error must not block v7_tcjp, v8_an, or v9_kssb
-    out_v6_err = tmp_path / "v6_err.db"
-    orig_v6_live = forward_v5.fit_predict_v6_live
-    monkeypatch.setattr(
-        forward_v5,
-        "fit_predict_v6_live",
-        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("sentetik v6 hatası")),
-    )
-    _ = capsys.readouterr()
-    w_when_v6_fails = forward_v5.run_once(
-        now="2026-04-20T13:55:00+03:00",
+    w_legacy_v6 = forward_v5.run_once(
+        now="2026-04-20T13:57:30+03:00",
         date_str=target_date,
         main_db=str(main_db),
-        out_db=str(out_v6_err),
+        out_db=str(out_partial),
         do_snapshot=False,
+        models="v6_e5",
         cache_dir=str(cache_dir),
     )
-    assert w_when_v6_fails == 18
-    assert "HATA (v6_e5)" in capsys.readouterr().out
-    monkeypatch.setattr(forward_v5, "fit_predict_v6_live", orig_v6_live)
-    econn6 = sqlite3.connect(str(out_v6_err))
-    try:
-        mvs6 = {r[0] for r in econn6.execute("SELECT DISTINCT model_version FROM predictions_v5").fetchall()}
-        assert mvs6 == {"v7_tcjp", "v8_an", "v9_kssb"}
-    finally:
-        econn6.close()
+    assert w_legacy_v6 == 6
 
-    # (c) v7_tcjp error must not block v6_e5, v8_an, or v9_kssb
+    # (b) v7_tcjp error must not block v8_an, v9_kssb, or v10_hlb
     out_v7_err = tmp_path / "v7_err.db"
     orig_v7_live = forward_v5.fit_predict_v7_live
     monkeypatch.setattr(
@@ -551,11 +536,11 @@ def test_run_once_partial_recovery_and_error_isolation(tmp_path, monkeypatch, ca
     econn7 = sqlite3.connect(str(out_v7_err))
     try:
         mvs7 = {r[0] for r in econn7.execute("SELECT DISTINCT model_version FROM predictions_v5").fetchall()}
-        assert mvs7 == {"v6_e5", "v8_an", "v9_kssb"}
+        assert mvs7 == {"v8_an", "v9_kssb", "v10_hlb"}
     finally:
         econn7.close()
 
-    # (d) v8_an error must not block v6_e5, v7_tcjp, or v9_kssb
+    # (c) v8_an error must not block v7_tcjp, v9_kssb, or v10_hlb
     out_v8_err = tmp_path / "v8_err.db"
     orig_v8_live = forward_v5.fit_predict_v8_live
     monkeypatch.setattr(
@@ -578,11 +563,11 @@ def test_run_once_partial_recovery_and_error_isolation(tmp_path, monkeypatch, ca
     econn8 = sqlite3.connect(str(out_v8_err))
     try:
         mvs8 = {r[0] for r in econn8.execute("SELECT DISTINCT model_version FROM predictions_v5").fetchall()}
-        assert mvs8 == {"v6_e5", "v7_tcjp", "v9_kssb"}
+        assert mvs8 == {"v7_tcjp", "v9_kssb", "v10_hlb"}
     finally:
         econn8.close()
 
-    # (e) v9_kssb error must not block v6_e5, v7_tcjp, or v8_an
+    # (d) v9_kssb error must not block v7_tcjp, v8_an, or v10_hlb
     out_v9_err = tmp_path / "v9_err.db"
     orig_v9_live = forward_v5.fit_predict_v9_live
     monkeypatch.setattr(
@@ -605,9 +590,36 @@ def test_run_once_partial_recovery_and_error_isolation(tmp_path, monkeypatch, ca
     econn9 = sqlite3.connect(str(out_v9_err))
     try:
         mvs9 = {r[0] for r in econn9.execute("SELECT DISTINCT model_version FROM predictions_v5").fetchall()}
-        assert mvs9 == {"v6_e5", "v7_tcjp", "v8_an"}
+        assert mvs9 == {"v7_tcjp", "v8_an", "v10_hlb"}
     finally:
         econn9.close()
+
+    # (e) v10_hlb error must not block v7_tcjp, v8_an, or v9_kssb
+    out_v10_err = tmp_path / "v10_err.db"
+    orig_v10_live = forward_v5.fit_predict_v10_live
+    monkeypatch.setattr(
+        forward_v5,
+        "fit_predict_v10_live",
+        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("sentetik v10 hatası")),
+    )
+    _ = capsys.readouterr()
+    w_when_v10_fails = forward_v5.run_once(
+        now="2026-04-20T13:55:00+03:00",
+        date_str=target_date,
+        main_db=str(main_db),
+        out_db=str(out_v10_err),
+        do_snapshot=False,
+        cache_dir=str(cache_dir),
+    )
+    assert w_when_v10_fails == 18
+    assert "HATA (v10_hlb)" in capsys.readouterr().out
+    monkeypatch.setattr(forward_v5, "fit_predict_v10_live", orig_v10_live)
+    econn10 = sqlite3.connect(str(out_v10_err))
+    try:
+        mvs10 = {r[0] for r in econn10.execute("SELECT DISTINCT model_version FROM predictions_v5").fetchall()}
+        assert mvs10 == {"v7_tcjp", "v8_an", "v9_kssb"}
+    finally:
+        econn10.close()
 
 
 def test_run_once_v6_daily_cache_reuse_and_key_change_retrain(tmp_path, monkeypatch):
@@ -621,10 +633,12 @@ def test_run_once_v6_daily_cache_reuse_and_key_change_retrain(tmp_path, monkeypa
     v7_fit_calls = []
     v8_fit_calls = []
     v9_fit_calls = []
+    v10_fit_calls = []
     real_fit_bundle = model_v6.fit_v6_model_bundle
     real_v7_fit_bundle = model_v7.fit_v7_model_bundle
     real_v8_fit_bundle = model_v8.fit_v8_model_bundle
     real_v9_fit_bundle = model_v9.fit_v9_model_bundle
+    real_v10_fit_bundle = model_v10.fit_v10_model_bundle
 
     def _spy_fit(train_df, config=None):
         fit_calls.append(len(train_df))
@@ -642,12 +656,17 @@ def test_run_once_v6_daily_cache_reuse_and_key_change_retrain(tmp_path, monkeypa
         v9_fit_calls.append(len(train_df))
         return real_v9_fit_bundle(train_df, config=config)
 
+    def _spy_v10_fit(train_df, config=None):
+        v10_fit_calls.append(len(train_df))
+        return real_v10_fit_bundle(train_df, config=config)
+
     monkeypatch.setattr(model_v6, "fit_v6_model_bundle", _spy_fit)
     monkeypatch.setattr(model_v7, "fit_v7_model_bundle", _spy_v7_fit)
     monkeypatch.setattr(model_v8, "fit_v8_model_bundle", _spy_v8_fit)
     monkeypatch.setattr(model_v9, "fit_v9_model_bundle", _spy_v9_fit)
+    monkeypatch.setattr(model_v10, "fit_v10_model_bundle", _spy_v10_fit)
 
-    # Race 1 at 13:55 -> trains V6 + V7 + V8 + V9 once each and writes <date>_{v6_e5,v7_tcjp,v8_an,v9_kssb}.pkl
+    # Race 1 at 13:55 -> trains V7 + V8 + V9 + V10 once each and writes <date>_{v7_tcjp,v8_an,v9_kssb,v10_hlb}.pkl
     w1 = forward_v5.run_once(
         now="2026-04-20T13:55:00+03:00",
         date_str=target_date,
@@ -662,6 +681,7 @@ def test_run_once_v6_daily_cache_reuse_and_key_change_retrain(tmp_path, monkeypa
     assert len(v7_fit_calls) == 1
     assert len(v8_fit_calls) == 1
     assert len(v9_fit_calls) == 1
+    assert len(v10_fit_calls) == 1
 
     # Race 2 at 14:24 (same day, same train_start & configs) -> loads caches without retraining
     w2 = forward_v5.run_once(
@@ -678,8 +698,9 @@ def test_run_once_v6_daily_cache_reuse_and_key_change_retrain(tmp_path, monkeypa
     assert len(v7_fit_calls) == 1
     assert len(v8_fit_calls) == 1
     assert len(v9_fit_calls) == 1
+    assert len(v10_fit_calls) == 1
 
-    # Race 3 at 14:54 with altered train_start -> cache keys change -> retrains V6, V7, V8, and V9
+    # Race 3 at 14:54 with altered train_start -> cache keys change -> retrains V7, V8, V9, and V10
     w3 = forward_v5.run_once(
         now="2026-04-20T14:54:00+03:00",
         date_str=target_date,
@@ -694,6 +715,7 @@ def test_run_once_v6_daily_cache_reuse_and_key_change_retrain(tmp_path, monkeypa
     assert len(v7_fit_calls) == 2
     assert len(v8_fit_calls) == 2
     assert len(v9_fit_calls) == 2
+    assert len(v10_fit_calls) == 2
 
 
 def test_v6_history_start_excludes_pre_2006_03_04_rows(tmp_path):
@@ -816,13 +838,14 @@ def test_backcheck_cli_and_report_integration(tmp_path, capsys):
     assert "atlanan_sonuclanmamis=1" in joined_1
     assert "AGF (kapanış)" in joined_1
     assert "v5_sgr_all" not in joined_1
-    assert "v6_e5" in joined_1
+    assert "v6_e5" not in joined_1
     assert "v7_tcjp" in joined_1
     assert "v8_an" in joined_1
     assert "v9_kssb" in joined_1
-    assert "spearman(v7_tcjp, v6_e5)" in joined_1
+    assert "v10_hlb" in joined_1
     assert "spearman(v8_an, v7_tcjp)" in joined_1
     assert "spearman(v9_kssb, v8_an)" in joined_1
+    assert "spearman(v10_hlb, v9_kssb)" in joined_1
 
     # 2) --backcheck with --out writes predictions_v5 for all 4 active models, consumable by forward_v5_report.py
     bc_out_db = tmp_path / "bc_preds.db"
@@ -841,7 +864,7 @@ def test_backcheck_cli_and_report_integration(tmp_path, capsys):
                 "SELECT model_version, COUNT(*) FROM predictions_v5 GROUP BY model_version"
             ).fetchall()
         )
-        assert cnts == {"v6_e5": 11, "v7_tcjp": 11, "v8_an": 11, "v9_kssb": 11}
+        assert cnts == {"v7_tcjp": 11, "v8_an": 11, "v9_kssb": 11, "v10_hlb": 11}
     finally:
         bconn.close()
 
@@ -852,8 +875,9 @@ def test_backcheck_cli_and_report_integration(tmp_path, capsys):
     assert rc_rep == 0
     md_txt = rep_md.read_text(encoding="utf-8")
     assert (
-        "Aktif Canlı Eşli Karşılaştırma Koşu Sayısı (`v6_e5` ∩ `v7_tcjp` ∩ `v8_an` ∩ `v9_kssb` ∩ `AGF`):** `2`"
+        "Aktif Canlı Eşli Karşılaştırma Koşu Sayısı (`v7_tcjp` ∩ `v8_an` ∩ `v9_kssb` ∩ `v10_hlb` ∩ `AGF`):** `2`"
     ) in md_txt
+    assert "`v10_hlb − v9_kssb`" in md_txt
     assert "`v9_kssb − v8_an`" in md_txt
     assert "`v8_an − v7_tcjp`" in md_txt
 

@@ -1,6 +1,6 @@
 name: Ganyan V6 Canlı
 
-# Mac bağımsız V6 (v6_e5) + V7 (v7_tcjp) + V8 (v8_an) + V9 (v9_kssb) günlük güncelleme ve canlı koşu-öncesi tahmin döngüsü (V5 emekli).
+# Mac bağımsız V7 (v7_tcjp) + V8 (v8_an) + V9 (v9_kssb) + V10 (v10_hlb) günlük güncelleme ve canlı koşu-öncesi tahmin döngüsü (V5 ve V6 emekli).
 # Cloud Scheduler günde 3 oturum tetikler (TR 09:40 -> 13:43, 13:45 -> 17:33, 17:34 -> 21:38).
 on:
   workflow_dispatch:
@@ -180,14 +180,14 @@ jobs:
           )"
 
           echo "[$(date '+%H:%M:%S')] Canlı döngü aktif (bitiş epoch=${END_EPOCH})" | tee -a state/forward_v5.log
-          V6_MODEL_EXISTED=0
           V7_MODEL_EXISTED=0
           V8_MODEL_EXISTED=0
           V9_MODEL_EXISTED=0
-          [ -s "data/forward_models/${TODAY}_v6_e5.pkl" ] && V6_MODEL_EXISTED=1
+          V10_MODEL_EXISTED=0
           [ -s "data/forward_models/${TODAY}_v7_tcjp.pkl" ] && V7_MODEL_EXISTED=1
           [ -s "data/forward_models/${TODAY}_v8_an.pkl" ] && V8_MODEL_EXISTED=1
           [ -s "data/forward_models/${TODAY}_v9_kssb.pkl" ] && V9_MODEL_EXISTED=1
+          [ -s "data/forward_models/${TODAY}_v10_hlb.pkl" ] && V10_MODEL_EXISTED=1
 
           while true; do
             BEFORE_N="$(pred_count)"
@@ -203,10 +203,6 @@ jobs:
               push_state "v6 tahmin $(date '+%Y-%m-%d %H:%M:%S')"
             fi
 
-            if [ "$V6_MODEL_EXISTED" = "0" ] && [ -s "data/forward_models/${TODAY}_v6_e5.pkl" ]; then
-              V6_MODEL_EXISTED=1
-              NEED_BACKUP=1
-            fi
             if [ "$V7_MODEL_EXISTED" = "0" ] && [ -s "data/forward_models/${TODAY}_v7_tcjp.pkl" ]; then
               V7_MODEL_EXISTED=1
               NEED_BACKUP=1
@@ -217,6 +213,10 @@ jobs:
             fi
             if [ "$V9_MODEL_EXISTED" = "0" ] && [ -s "data/forward_models/${TODAY}_v9_kssb.pkl" ]; then
               V9_MODEL_EXISTED=1
+              NEED_BACKUP=1
+            fi
+            if [ "$V10_MODEL_EXISTED" = "0" ] && [ -s "data/forward_models/${TODAY}_v10_hlb.pkl" ]; then
+              V10_MODEL_EXISTED=1
               NEED_BACKUP=1
             fi
 
