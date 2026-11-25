@@ -53,9 +53,9 @@ Bet = namedtuple("Bet", "odds win p agfp rid w", defaults=(1.0,))   # w: bahis t
 
 
 # ----------------------------------------------------------------------------- veri
-def load_pred():
+def load_pred(years=YEARS):
     parts = []
-    for y in range(2022, 2027):
+    for y in years:
         fs = sorted(glob.glob(str(PRED_DIR / f"pred_V10_HLB_CAL_*_{y}.pkl")))
         if len(fs) != 1:
             raise SystemExit(f"{y} için tam 1 pred_V10_HLB_CAL dosyası bekleniyordu, bulunan: {fs}")
@@ -67,7 +67,7 @@ def ro():
     return sqlite3.connect(f"file:{REPO}/data/ganyan.db?mode=ro", uri=True)
 
 
-def load():
+def load(first=FIRST, last=LAST, years=YEARS):
     con = ro()
     d = pd.read_sql(
         """select ru.race_id, ru.prog_no, ru.horse_key, ru.finish, ru.ganyan, ru.agf_close,
@@ -75,9 +75,9 @@ def load():
            from runners ru join races r using(race_id)
            where r.date between ? and ? and r.status = 'result'
              and ifnull(ru.scratched, 0) = 0 and ru.ganyan > 0""",
-        con, params=[FIRST, LAST])
+        con, params=[first, last])
     con.close()
-    d = d.merge(load_pred(), on=["race_id", "horse_key"], how="left")
+    d = d.merge(load_pred(years), on=["race_id", "horse_key"], how="left")
     d["win"] = (d.finish == 1).astype(int)
     d = d[d.groupby("race_id").win.transform("sum") >= 1].copy()      # sonuçlanmış koşular
     g = d.groupby("race_id")
@@ -190,12 +190,12 @@ def parse_combo(s):
         return None
 
 
-def load_bets(con):
+def load_bets(con, first=FIRST, last=LAST):
     """{race_id: {bahis: [(kombinasyon, ödeme)]}}. k. çifte = k. ve k+1. koşunun kazananları, kayıt 2. ayağın koşusunda."""
     q = ("select race_id, bet, combo, payout from bets where substr(race_id, 1, 10) between ? and ? "
          "and (bet in ('PLASE', 'İKİLİ', 'SIRALI İKİLİ', 'ÜÇLÜ BAHİS') or bet like '%. ÇİFTE')")
     ex = {}
-    for rid, bet, combo, pay in con.execute(q, (FIRST, LAST)):
+    for rid, bet, combo, pay in con.execute(q, (first, last)):
         if bet.endswith("ÇİFTE"):
             if int(bet.split(".")[0]) + 1 != int(rid.rsplit("_", 1)[1]):
                 continue
@@ -517,6 +517,17 @@ def rejim(d):
     return runs
 
 
+def cita(d):
+    """Ganyan çıtaları (1 TL'lik bahis, bütün koşular): (ad, isabet, getiri) — rastgele at, favori (kapanış oranı), modelin 1. tercihi."""
+    roi = lambda x: x.win.mul(x.ganyan).mean() - 1
+    fav = d.loc[d.groupby("race_id").ganyan.idxmin()]
+    m = d[d.p.notna()]
+    mt = m.loc[m.groupby("race_id").p.idxmax()]
+    return [("Her koşuda rastgele at", d.win.mean(), roi(d)),
+            ("Her koşuda favori (kapanış oranı)", fav.win.mean(), roi(fav)),
+            ("Her koşuda modelin 1. tercihi", mt.win.mean(), roi(mt))]
+
+
 def bench(days, dates, spec, who):
     """Bu bahsin oynandığı bütün koşularda tek tip oyun (1 birim): who = model | favori | rastgele. Gün gün plan listesi."""
     plans = []
@@ -613,14 +624,7 @@ def main():
             expect=float(np.nanmean([b.p for b in bets])) if bets else np.nan)
         print(f"{name:18s} {time.time() - t0:5.1f}s", flush=True)
 
-    # kıyas çıtaları (birim bahis; 2022-2026 tüm koşular)
-    roi = lambda x: x.win.mul(x.ganyan).mean() - 1
-    fav = d.loc[d.groupby("race_id").ganyan.idxmin()]
-    m = d[d.p.notna()]
-    mt = m.loc[m.groupby("race_id").p.idxmax()]
-    bench_g = [("Her koşuda rastgele at", d.win.mean(), roi(d)),
-               ("Her koşuda favori (kapanış oranı)", fav.win.mean(), roi(fav)),
-               ("Her koşuda modelin 1. tercihi", mt.win.mean(), roi(mt))]
+    bench_g = cita(d)                        # kıyas çıtaları (birim bahis; 2022-2026 tüm koşular)
 
     # diğer bahis türlerinde modelin başarısı: model / favori / rastgele, aynı koşularda, 1 birimlik bahis
     ne = {"plase": "At ilk ikiye girer", "ikili": "İlk iki at, sırası önemsiz", "sirali": "İlk iki at, sırasıyla",
