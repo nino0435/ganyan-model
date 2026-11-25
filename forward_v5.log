@@ -356,3 +356,11 @@
 [21:25:37] v8_an: 1 koşu için 11 tahmin yazıldı [Antalya 21:30 (mtp=7.1m, S=91%, G=100%)]
 [21:25:37] v9_kssb: 1 koşu için 11 tahmin yazıldı [Antalya 21:30 (mtp=7.1m, S=91%, G=100%)]
 [21:25:37] v10_hlb: 1 koşu için 11 tahmin yazıldı [Antalya 21:30 (mtp=7.1m, S=91%, G=100%)]
+[09:40:40] Günlük güncelleme başlıyor (2026-11-25)...
+[09:41:15] tjk güncellendi (2026-11-24 sonuç=16, 2026-11-25 koşu=18)
+[09:41:28] yenibeygir güncellendi (2026-11-23..2026-11-24: yeni_koşu=33, hız_dolu=361)
+[09:43:09] yenibeygir galop güncellendi (2026-11-24..2026-11-25: koşu=34 at=356 galop=3507 (yeni=1880) eşleşmeyen_at=0 hata=0)
+[09:51:01] prewarm v7_tcjp: hazır (2026-11-25, satır=635692, 447.8s)
+[09:58:01] prewarm v8_an: hazır (2026-11-25, satır=635692, 419.3s)
+[10:06:33] prewarm v9_kssb: hazır (2026-11-25, satır=635692, 511.7s)
+[10:15:41] prewarm v10_hlb: hazır (2026-11-25, satır=635692, 548.0s)
