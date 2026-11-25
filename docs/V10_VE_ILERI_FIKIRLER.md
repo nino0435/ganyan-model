@@ -19,6 +19,8 @@ Bu 4 paket, mevcut veritabanındaki (`2005–2026`, `111.000+` koşu) TJK yarı�
 
 ## 2. Yeni Veri Birikince Sınanacak V11+ Fikirleri *(Toplayıcılar Şu An Bulutta Aktif)*
 
+> **Numara notu (25.11.2026):** `V11` etiketi sonradan pist + hava deneyi için kullanıldı ve rafa kaldırıldı (`docs/V11_KARAR.md`; `features_v11.py` ve `run_v11_experiments.py` ona ait). Aşağıdaki tabloda `V11` yazan "Canlı Oran İvmesi" fikri sınanmadı; sınanırken yeni sürüm numarası alacak.
+
 Bu fikirler için ham veri toplama hatları **15 Kasım 2026**'dan beri bulutta otomatik olarak çalışmaktadır. Güvenilir test yapabilmek için geçmiş sonuçlanmış koşu arşivinin **en az 60–90 gün** (`~1.000–1.500+` koşu) birikmesi hedeflenmektedir.
 
 | Aşama | Fikir / Yaklaşım | Ne İşe Yarar? (Yarış Mantığı) | Aktif Veri Kaynağı ve Güncel Durum *(24.11.2026)* | Hedef Veri Eşiği |
