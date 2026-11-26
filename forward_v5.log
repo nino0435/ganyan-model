@@ -439,3 +439,11 @@
 [21:25:10] v8_an: 1 koşu için 14 tahmin yazıldı [Elazığ 21:30 (mtp=7.8m, S=79%, G=86%)]
 [21:25:10] v9_kssb: 1 koşu için 14 tahmin yazıldı [Elazığ 21:30 (mtp=7.8m, S=79%, G=86%)]
 [21:25:10] v10_hlb: 1 koşu için 14 tahmin yazıldı [Elazığ 21:30 (mtp=7.8m, S=79%, G=86%)]
+[09:40:51] Günlük güncelleme başlıyor (2026-11-26)...
+[09:41:25] tjk güncellendi (2026-11-25 sonuç=18, 2026-11-26 koşu=14)
+[09:41:56] yenibeygir güncellendi (2026-11-24..2026-11-25: yeni_koşu=34, hız_dolu=335)
+[09:45:03] yenibeygir galop güncellendi (2026-11-25..2026-11-26: koşu=32 at=337 galop=3333 (yeni=1202) eşleşmeyen_at=0 hata=0)
+[09:54:01] prewarm v7_tcjp: hazır (2026-11-26, satır=635872, 513.9s)
+[10:02:07] prewarm v8_an: hazır (2026-11-26, satır=635872, 485.8s)
+[10:11:15] prewarm v9_kssb: hazır (2026-11-26, satır=635872, 548.1s)
+[10:20:33] prewarm v10_hlb: hazır (2026-11-26, satır=635872, 557.5s)
