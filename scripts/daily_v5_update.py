@@ -22,6 +22,7 @@ from scripts import backfill_liderform, backfill_yenibeygir
 from scripts.update_daily import update_daily
 
 IST_TZ = ZoneInfo("Europe/Istanbul")
+GALOP_LOOKBACK_DAYS = 6
 
 
 def _one_line(text):
@@ -198,22 +199,28 @@ def run_daily_v5_update(
     except Exception as exc:
         _log(f"UYARI: yenibeygir güncellenemedi ({exc})")
 
-    # (iii) Galop: [yesterday, today] (pre-race galop pages), delay=2.0
+    # (iii) Galop: [today - GALOP_LOOKBACK_DAYS, today] (pre-race galop pages), delay=2.0
+    # Geniş pencere: yenibeygir_galop günde bir kez çalıştığından, [dün, bugün] tek
+    # başına bazı şehirlerin koşu günlerini kaçırabiliyordu (örn. 2 günlük pencereye
+    # denk gelmeyen şehirler). fetch_log zaten 'ok' olan hedefleri atladığından
+    # (ganyan/sources/fetch.py: fetched_ok), pencereyi genişletmek ek maliyet
+    # yaratmadan kaçırılanları yakalar.
     if galop_source == "yenibeygir":
         try:
             yb_galop_dir = f"{yb_raw_dir}_galop"
             os.makedirs(yb_galop_dir, exist_ok=True)
+            galop_start_s = (d_today - datetime.timedelta(days=GALOP_LOOKBACK_DAYS)).isoformat()
             conn = init_db(db_path)
             try:
                 conn.execute("PRAGMA busy_timeout=60000")
-                st = _run_yb_galop_backfill(conn, yb_galop_dir, yest_s, today_s, delay=delay)
+                st = _run_yb_galop_backfill(conn, yb_galop_dir, galop_start_s, today_s, delay=delay)
             finally:
                 conn.close()
             if st["races"] == 0 and st["errors"] > 0:
                 _log(f"UYARI: yenibeygir galop güncellenemedi (hata={st['errors']})")
             else:
                 _log(
-                    f"yenibeygir galop güncellendi ({yest_s}..{today_s}: "
+                    f"yenibeygir galop güncellendi ({galop_start_s}..{today_s}: "
                     f"koşu={st['races']} at={st['horses']} galop={st['workouts']} "
                     f"(yeni={st['inserted']}) eşleşmeyen_at={st['unmatched']} hata={st['errors']})"
                 )

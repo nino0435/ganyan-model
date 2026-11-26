@@ -196,6 +196,8 @@ def _compute_cov_summary_rows(preds_df, models_order):
         ).mean()
         s_vals = by_race["s"].dropna().to_numpy(dtype=np.float64)
         g_vals = by_race["g"].dropna().to_numpy(dtype=np.float64)
+        s_ids = by_race["s"].dropna().index.to_numpy()
+        g_ids = by_race["g"].dropna().index.to_numpy()
         dates = sub["race_id"].astype(str).str[:10]
         rows.append(
             {
@@ -207,9 +209,11 @@ def _compute_cov_summary_rows(preds_df, models_order):
                 "s_mean": float(np.mean(s_vals)) if len(s_vals) else 0.0,
                 "s_med": float(np.median(s_vals)) if len(s_vals) else 0.0,
                 "s_min": float(np.min(s_vals)) if len(s_vals) else 0.0,
+                "s_min_race": str(s_ids[int(np.argmin(s_vals))]) if len(s_vals) else "—",
                 "g_mean": float(np.mean(g_vals)) if len(g_vals) else 0.0,
                 "g_med": float(np.median(g_vals)) if len(g_vals) else 0.0,
                 "g_min": float(np.min(g_vals)) if len(g_vals) else 0.0,
+                "g_min_race": str(g_ids[int(np.argmin(g_vals))]) if len(g_vals) else "—",
             }
         )
     return rows
@@ -746,6 +750,7 @@ def build_forward_v5_report(main_db="data/ganyan.db", forward_db="data/forward_v
         "|---|---:|---|---|---|---:|---:|---|---|",
     ]
     cov_by_model = {r["model"]: r for r in cov_rows}
+    min_cov_notes = []
     for mv in models_order:
         cr = cov_by_model[mv]
         m_map = model_metrics_by_race.get(mv, {})
@@ -759,6 +764,13 @@ def build_forward_v5_report(main_db="data/ganyan.db", forward_db="data/forward_v
             s_txt = f"{cr['s_mean']:.1%} ({cr['s_med']:.1%} / {cr['s_min']:.1%})"
             g_txt = f"{cr['g_mean']:.1%} ({cr['g_med']:.1%} / {cr['g_min']:.1%})"
             dt_txt = f"`{cr['min_date']}`…`{cr['max_date']}`"
+            # Min s_cov/g_cov genelde debut/az-koşmuş atların doğal veri azlığıdır
+            # (bkz. docs); hangi koşu olduğunu göstermek yanlış "scraper hatası"
+            # yorumunu önler.
+            if cr["s_min"] < 0.5:
+                min_cov_notes.append(f"`{mv}` s_cov min → `{cr['s_min_race']}` ({cr['s_min']:.0%})")
+            if cr["g_min"] < 0.5:
+                min_cov_notes.append(f"`{mv}` g_cov min → `{cr['g_min_race']}` ({cr['g_min']:.0%})")
 
         if n_m == 0:
             lines.append(
@@ -775,6 +787,15 @@ def build_forward_v5_report(main_db="data/ganyan.db", forward_db="data/forward_v
                 f"| `{mv}` | {cr['logged_races']} | {dt_txt} | {s_txt} | {g_txt} | "
                 f"{n_m} | {float(m_ll.mean()):.4f} | {t1:.1%} / {t2:.1%} / {t3:.1%} | {d_s} ({ci_s}) |"
             )
+
+    if min_cov_notes:
+        lines += [
+            "",
+            "**Düşük kapsamlı (<%50) koşular** (genelde debut/az-koşmuş at kaynaklı; "
+            "scraper arızası değil — bkz. `race_id`):",
+            "",
+        ]
+        lines += [f"- {note}" for note in min_cov_notes]
 
     return "\n".join(lines).rstrip() + "\n"
 
