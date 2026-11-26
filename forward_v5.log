@@ -448,3 +448,8 @@
 [10:11:15] prewarm v9_kssb: hazır (2026-11-26, satır=635872, 548.1s)
 [10:20:33] prewarm v10_hlb: hazır (2026-11-26, satır=635872, 557.5s)
 [10:20:57] Canlı döngü aktif (bitiş epoch=1795689780)
+[13:45:48] Canlı döngü aktif (bitiş epoch=1795703580)
+[15:26:08] v7_tcjp: 1 koşu için 12 tahmin yazıldı [İzmir 15:30 (mtp=7.4m, S=83%, G=100%)]
+[15:26:08] v8_an: 1 koşu için 12 tahmin yazıldı [İzmir 15:30 (mtp=7.4m, S=83%, G=100%)]
+[15:26:08] v9_kssb: 1 koşu için 12 tahmin yazıldı [İzmir 15:30 (mtp=7.4m, S=83%, G=100%)]
+[15:26:08] v10_hlb: 1 koşu için 12 tahmin yazıldı [İzmir 15:30 (mtp=7.4m, S=83%, G=100%)]
