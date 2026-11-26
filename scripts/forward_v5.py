@@ -35,6 +35,7 @@ from ganyan.model_v7 import V7_LIVE_MODEL_VERSION, fit_predict_v7_live
 from ganyan.model_v8 import V8_LIVE_MODEL_VERSION, fit_predict_v8_live
 from ganyan.model_v9 import V9_LIVE_MODEL_VERSION, fit_predict_v9_live
 from ganyan.model_v10 import V10_LIVE_MODEL_VERSION, fit_predict_v10_live
+from ganyan.model_fund06 import FUND06_CONFIG, FUND06_LIVE_MODEL_VERSION, FUND06_TRAIN_START, fit_predict_fund06_live
 from scripts.snapshot_agf import snapshot_agf
 
 IST_TZ = ZoneInfo("Europe/Istanbul")
@@ -44,6 +45,7 @@ V7_MODEL_VERSION = V7_LIVE_MODEL_VERSION
 V8_MODEL_VERSION = V8_LIVE_MODEL_VERSION
 V9_MODEL_VERSION = V9_LIVE_MODEL_VERSION
 V10_MODEL_VERSION = V10_LIVE_MODEL_VERSION
+FUND06_MODEL_VERSION = FUND06_LIVE_MODEL_VERSION
 DEFAULT_MODELS = (V7_MODEL_VERSION, V8_MODEL_VERSION, V9_MODEL_VERSION, V10_MODEL_VERSION)
 SUPPORTED_MODELS = (
     MODEL_VERSION,
@@ -52,6 +54,7 @@ SUPPORTED_MODELS = (
     V8_MODEL_VERSION,
     V9_MODEL_VERSION,
     V10_MODEL_VERSION,
+    FUND06_MODEL_VERSION,
 )
 DEFAULT_OUT_DB = "data/forward_v5.db"
 DEFAULT_MODEL_CACHE_DIR = "data/forward_models"
@@ -596,6 +599,25 @@ def _fit_predict_v10_from_feat(feat_df, ds, train_start, target_race_ids, v10_cf
     )
 
 
+def _fit_predict_fund06_from_feat(feat_df, ds, target_race_ids, cache_path=None):
+    """FUND_06 (`fund_06`): AGF'siz 147 özellik, 2006'dan itibaren eğitim, 1 tohum, kalibrasyonsuz teşhis kaydı.
+
+    `feat_df`, zaten kurulmuş olan V10 özellik çerçevesinin (`feat_v10`) aynısıdır — FUND_06'nın 147 özelliği
+    V10'un 155 özelliğinin bir alt kümesi olduğundan ayrı bir özellik mühendisliği gerekmez. Eğitim başlangıcı
+    `train_start` CLI parametresinden bağımsız olarak sabit `FUND06_TRAIN_START` ("2006-01-01") kullanır.
+    """
+    return _fit_predict_live_from_feat(
+        feat_df,
+        ds=ds,
+        train_start=FUND06_TRAIN_START,
+        target_race_ids=target_race_ids,
+        cfg=FUND06_CONFIG,
+        model_version=FUND06_MODEL_VERSION,
+        live_fn=fit_predict_fund06_live,
+        cache_path=cache_path,
+    )
+
+
 def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_dir=None, main_db=None):
     """Shared feature-building and model-prediction pipeline for both `run_once` and `run_backcheck`.
 
@@ -611,7 +633,9 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
     need_v7 = bool(race_ids_by_model.get(V7_MODEL_VERSION))
     need_v8 = bool(race_ids_by_model.get(V8_MODEL_VERSION))
     need_v9 = bool(race_ids_by_model.get(V9_MODEL_VERSION))
-    need_v10 = bool(race_ids_by_model.get(V10_MODEL_VERSION))
+    need_fund06 = bool(race_ids_by_model.get(FUND06_MODEL_VERSION))
+    # fund_06, V10 özellik çerçevesini (feat_v10) yeniden kullandığı için onu da kurar — v10_hlb hiç istenmese bile.
+    need_v10 = bool(race_ids_by_model.get(V10_MODEL_VERSION)) or need_fund06
     base_feat_cache = None
     base_sig_cache = None
     v7_feat_cache = None
@@ -1143,24 +1167,50 @@ def _predict_models_core(df, tables, ds, train_start, race_ids_by_model, cache_d
             feat_v9_v10 = None
             gc.collect()
 
-            c_path = (
-                os.path.join(str(cache_dir), f"{ds}_{V10_MODEL_VERSION}.pkl")
-                if cache_dir
-                else None
-            )
-            pred_v10 = _fit_predict_v10_from_feat(
-                feat_v10,
-                ds=ds,
-                train_start=train_start,
-                target_race_ids=race_ids_by_model[V10_MODEL_VERSION],
-                v10_cfg=v10_cfg,
-                cache_path=c_path,
-            )
-            if pred_v10 is not None and not pred_v10.empty:
-                preds_by_model[V10_MODEL_VERSION] = pred_v10
+            if V10_MODEL_VERSION in race_ids_by_model:
+                try:
+                    c_path = (
+                        os.path.join(str(cache_dir), f"{ds}_{V10_MODEL_VERSION}.pkl")
+                        if cache_dir
+                        else None
+                    )
+                    pred_v10 = _fit_predict_v10_from_feat(
+                        feat_v10,
+                        ds=ds,
+                        train_start=train_start,
+                        target_race_ids=race_ids_by_model[V10_MODEL_VERSION],
+                        v10_cfg=v10_cfg,
+                        cache_path=c_path,
+                    )
+                    if pred_v10 is not None and not pred_v10.empty:
+                        preds_by_model[V10_MODEL_VERSION] = pred_v10
+                except Exception as exc:
+                    errors_by_model[V10_MODEL_VERSION] = exc
+                    _log(f"HATA ({V10_MODEL_VERSION}): {exc}")
+
+            # FUND_06 (teşhis amaçlı, canlı varsayılanı değiştirmez): V10 özellik çerçevesini (`feat_v10`) yeniden
+            # kullanır (147 özelliği V10'un 155'inin alt kümesi), yalnız `--models` ile açıkça istenirse çalışır.
+            if need_fund06 and FUND06_MODEL_VERSION in race_ids_by_model:
+                try:
+                    c_path_f06 = (
+                        os.path.join(str(cache_dir), f"{ds}_{FUND06_MODEL_VERSION}.pkl")
+                        if cache_dir
+                        else None
+                    )
+                    pred_fund06 = _fit_predict_fund06_from_feat(
+                        feat_v10,
+                        ds=ds,
+                        target_race_ids=race_ids_by_model[FUND06_MODEL_VERSION],
+                        cache_path=c_path_f06,
+                    )
+                    if pred_fund06 is not None and not pred_fund06.empty:
+                        preds_by_model[FUND06_MODEL_VERSION] = pred_fund06
+                except Exception as exc:
+                    errors_by_model[FUND06_MODEL_VERSION] = exc
+                    _log(f"HATA ({FUND06_MODEL_VERSION}): {exc}")
         except Exception as exc:
             errors_by_model[V10_MODEL_VERSION] = exc
-            _log(f"HATA ({V10_MODEL_VERSION}): {exc}")
+            _log(f"HATA ({V10_MODEL_VERSION} öznitelik kurulumu): {exc}")
         finally:
             base_feat_cache = None
             base_sig_cache = None

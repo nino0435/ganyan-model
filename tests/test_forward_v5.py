@@ -881,3 +881,105 @@ def test_backcheck_cli_and_report_integration(tmp_path, capsys):
     assert "`v9_kssb − v8_an`" in md_txt
     assert "`v8_an − v7_tcjp`" in md_txt
 
+
+def test_run_once_fund06_teşhis_kaydı_v10_özellik_çerçevesini_paylaşır(tmp_path, monkeypatch):
+    """`fund_06`, SUPPORTED_MODELS'e canlı varsayılanı (`v10_hlb`) hiç değiştirmeden ek bir teşhis kaydı olarak eklenir."""
+    main_db = tmp_path / "ganyan.db"
+    out_db = tmp_path / "forward_v5.db"
+    _populate_synthetic_v5_sqlite(main_db)
+
+    target_date = "2026-04-20"
+    rid_due = f"{target_date}_Ankara_1"
+
+    conn = init_db(main_db)
+    try:
+        upsert_program(
+            conn,
+            {
+                "races": [
+                    {
+                        "race_id": rid_due,
+                        "date": target_date,
+                        "city": "Ankara",
+                        "race_no": 1,
+                        "post_time": "14:00",
+                        "yg_no": 1,
+                        "cls": "ŞARTLI",
+                        "breed": "Ingiliz",
+                        "distance": 1400,
+                        "surface": "Çim",
+                        "status": "scheduled",
+                    }
+                ],
+                "runners": _make_prog_runners(rid_due, range(0, 6), agf_list=None),
+            },
+        )
+        for pno, pct in enumerate([30.0, 22.0, 18.0, 14.0, 10.0, 6.0], start=1):
+            conn.execute(
+                "INSERT INTO agf_snapshots (race_id, prog_no, captured_at, agf_pct, agf_rank) VALUES (?,?,?,?,?)",
+                (rid_due, pno, f"{target_date}T13:54:00+03:00", pct, pno),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    cache_dir = tmp_path / "forward_models"
+    monkeypatch.setattr(
+        forward_v5,
+        "snapshot_agf",
+        lambda ds, db_path=None, prog_dir=None, cities=None: 0,
+    )
+
+    # fund_06 istenince, v10_hlb hiç istenmese bile V10 özellik çerçevesi kurulup paylaşılmalı (SUPPORTED_MODELS'de
+    # olmasına rağmen `models` listesinde olmayan diğer modellere dokunulmadan).
+    written = forward_v5.run_once(
+        now="2026-04-20T13:55:00+03:00",
+        date_str=target_date,
+        main_db=str(main_db),
+        out_db=str(out_db),
+        train_start="2015-01-01",
+        due_max_min=8.0,
+        models="fund_06",
+        cache_dir=str(cache_dir),
+    )
+    assert written == 6
+    assert (cache_dir / f"{target_date}_fund_06.pkl").exists()
+    assert not (cache_dir / f"{target_date}_v10_hlb.pkl").exists()
+
+    oconn = sqlite3.connect(str(out_db))
+    try:
+        rows = oconn.execute(
+            "SELECT prog_no, model_version, p_win FROM predictions_v5 ORDER BY prog_no"
+        ).fetchall()
+    finally:
+        oconn.close()
+    assert len(rows) == 6
+    assert {r[1] for r in rows} == {"fund_06"}
+    p_vals = [r[2] for r in rows]
+    assert all(0.0 < p < 1.0 for p in p_vals)
+    assert sum(p_vals) == pytest.approx(1.0)
+
+    # fund_06, v10_hlb ile BİRLİKTE istenince de (ortak V10 özellik çerçevesi üzerinden) her ikisi de yazılmalı.
+    out_db2 = tmp_path / "forward_v5_both.db"
+    written_both = forward_v5.run_once(
+        now="2026-04-20T13:55:00+03:00",
+        date_str=target_date,
+        main_db=str(main_db),
+        out_db=str(out_db2),
+        train_start="2015-01-01",
+        due_max_min=8.0,
+        models="v10_hlb,fund_06",
+        cache_dir=str(cache_dir),
+    )
+    assert written_both == 12
+    oconn2 = sqlite3.connect(str(out_db2))
+    try:
+        mv_counts = dict(
+            oconn2.execute(
+                "SELECT model_version, COUNT(*) FROM predictions_v5 GROUP BY model_version"
+            ).fetchall()
+        )
+    finally:
+        oconn2.close()
+    assert mv_counts == {"v10_hlb": 6, "fund_06": 6}
+

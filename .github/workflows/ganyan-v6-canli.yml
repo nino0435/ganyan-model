@@ -1,6 +1,7 @@
 name: Ganyan V6 Canlı
 
 # Mac bağımsız V7 (v7_tcjp) + V8 (v8_an) + V9 (v9_kssb) + V10 (v10_hlb) günlük güncelleme ve canlı koşu-öncesi tahmin döngüsü (V5 ve V6 emekli).
+# fund_06 (AGF'siz saf-güç teşhis modeli, reports/BENTER.md) ek olarak kaydedilir; canlı varsayılan hâlâ v10_hlb'dir.
 # Cloud Scheduler günde 3 oturum tetikler (TR 09:40 -> 13:43, 13:45 -> 17:33, 17:34 -> 21:38).
 on:
   workflow_dispatch:
@@ -149,7 +150,7 @@ jobs:
           if [ "$INPUT_FORCE_UPDATE" = "true" ] || { [ "$LAST_UPD" != "$TODAY" ] && [ "$CUR_HM" -ge "0930" ]; }; then
             echo "[$(date '+%H:%M:%S')] Günlük güncelleme başlıyor (${TODAY})..." | tee -a state/forward_v5.log
             python -u scripts/daily_v5_update.py --date "$TODAY" --db data/ganyan.db --galop-source yenibeygir | tee -a state/forward_v5.log || true
-            python -u scripts/forward_v5.py --date "$TODAY" --db data/ganyan.db --model-cache-dir data/forward_models --prewarm-models | tee -a state/forward_v5.log || true
+            python -u scripts/forward_v5.py --date "$TODAY" --db data/ganyan.db --model-cache-dir data/forward_models --models v7_tcjp,v8_an,v9_kssb,v10_hlb,fund_06 --prewarm-models | tee -a state/forward_v5.log || true
             python scripts/forward_v5_report.py --db data/ganyan.db --forward-db state/forward_v5.db --out state/FORWARD_V5.md || true
             echo "$TODAY" > state/last_daily_update.txt
             push_state "v6 günlük güncelleme ${TODAY}"
@@ -184,10 +185,12 @@ jobs:
           V8_MODEL_EXISTED=0
           V9_MODEL_EXISTED=0
           V10_MODEL_EXISTED=0
+          FUND06_MODEL_EXISTED=0
           [ -s "data/forward_models/${TODAY}_v7_tcjp.pkl" ] && V7_MODEL_EXISTED=1
           [ -s "data/forward_models/${TODAY}_v8_an.pkl" ] && V8_MODEL_EXISTED=1
           [ -s "data/forward_models/${TODAY}_v9_kssb.pkl" ] && V9_MODEL_EXISTED=1
           [ -s "data/forward_models/${TODAY}_v10_hlb.pkl" ] && V10_MODEL_EXISTED=1
+          [ -s "data/forward_models/${TODAY}_fund_06.pkl" ] && FUND06_MODEL_EXISTED=1
 
           while true; do
             BEFORE_N="$(pred_count)"
@@ -196,6 +199,7 @@ jobs:
               --db data/ganyan.db \
               --out state/forward_v5.db \
               --model-cache-dir data/forward_models \
+              --models v7_tcjp,v8_an,v9_kssb,v10_hlb,fund_06 \
               --once | tee -a state/forward_v5.log || true
             AFTER_N="$(pred_count)"
 
@@ -217,6 +221,10 @@ jobs:
             fi
             if [ "$V10_MODEL_EXISTED" = "0" ] && [ -s "data/forward_models/${TODAY}_v10_hlb.pkl" ]; then
               V10_MODEL_EXISTED=1
+              NEED_BACKUP=1
+            fi
+            if [ "$FUND06_MODEL_EXISTED" = "0" ] && [ -s "data/forward_models/${TODAY}_fund_06.pkl" ]; then
+              FUND06_MODEL_EXISTED=1
               NEED_BACKUP=1
             fi
 
