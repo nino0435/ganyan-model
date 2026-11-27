@@ -507,3 +507,9 @@
 [10:22:30] prewarm v9_kssb: hazır (2026-11-27, satır=635992, 506.5s)
 [10:30:52] prewarm v10_hlb: hazır (2026-11-27, satır=635992, 501.2s)
 [10:31:17] Canlı döngü aktif (bitiş epoch=1795776180)
+[13:45:49] Canlı döngü aktif (bitiş epoch=1795789980)
+[14:30:14] v7_tcjp: 1 koşu için 12 tahmin yazıldı [Bursa 14:30 (mtp=7.0m, S=0%, G=100%)]
+[14:30:14] v8_an: 1 koşu için 12 tahmin yazıldı [Bursa 14:30 (mtp=7.0m, S=0%, G=100%)]
+[14:30:14] v9_kssb: 1 koşu için 12 tahmin yazıldı [Bursa 14:30 (mtp=7.0m, S=0%, G=100%)]
+[14:30:14] v10_hlb: 1 koşu için 12 tahmin yazıldı [Bursa 14:30 (mtp=7.0m, S=0%, G=100%)]
+[14:30:14] fund_06: 1 koşu için 12 tahmin yazıldı [Bursa 14:30 (mtp=7.0m, S=0%, G=100%)]
