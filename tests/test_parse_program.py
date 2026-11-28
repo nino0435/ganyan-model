@@ -11,6 +11,10 @@ def test_parse_program_adana_fixture():
     res = parse_program_file(FIXTURE, date="2026-10-27", city="Adana")
     assert res["yg_no"] == 21
     assert len(res["races"]) == 8
+    assert res["altili"] == [
+        {"date": "2026-10-27", "city": "Adana", "which": 1, "start_race": 1, "end_race": 6},
+        {"date": "2026-10-27", "city": "Adana", "which": 2, "start_race": 3, "end_race": 8},
+    ]
 
     r1 = res["races"][0]
     assert r1["race_no"] == 1
@@ -56,6 +60,42 @@ def test_upsert_program_db(tmp_path):
     upsert_program(conn, res)
     assert conn.execute("SELECT COUNT(*) FROM races").fetchone()[0] == 8
     assert conn.execute("SELECT COUNT(*) FROM runners").fetchone()[0] == len(res["runners"])
+    conn.close()
+
+
+def test_program_altili_schedule_then_results_fill_legs(tmp_path):
+    """Program kazıması altılı grubunu (start/end) önceden yazar; sonuç geldiğinde legs/payout dolar, start/end korunur."""
+    conn = init_db(tmp_path / "prog2.db")
+    res = parse_program_file(FIXTURE, date="2026-10-27", city="Adana")
+    upsert_program(conn, res)
+
+    rows = conn.execute(
+        "SELECT which, start_race, end_race, legs, payout FROM altili WHERE date='2026-10-27' AND city='Adana' ORDER BY which"
+    ).fetchall()
+    assert rows == [(1, 1, 6, None, None), (2, 3, 8, None, None)]
+
+    from ganyan.db import upsert_results
+    upsert_results(conn, {
+        "altili": [
+            {"date": "2026-10-27", "city": "Adana", "which": 1, "start_race": 1, "end_race": 6,
+             "legs": [1, 2, 3, 4, 5, 6], "payout": 150000.0},
+        ],
+        "races": [], "runners": [], "bets": [],
+    })
+    rows2 = conn.execute(
+        "SELECT which, start_race, end_race, legs, payout FROM altili WHERE date='2026-10-27' AND city='Adana' ORDER BY which"
+    ).fetchall()
+    assert rows2[0][3] == "[1, 2, 3, 4, 5, 6]"
+    assert rows2[0][4] == pytest.approx(150000.0)
+    assert rows2[1] == (2, 3, 8, None, None)   # ikinci altılı hâlâ sonuçlanmamış
+
+    # Program yeniden kazınırsa (aynı gün) dolmuş legs/payout bozulmamalı
+    upsert_program(conn, res)
+    rows3 = conn.execute(
+        "SELECT which, legs, payout FROM altili WHERE date='2026-10-27' AND city='Adana' ORDER BY which"
+    ).fetchall()
+    assert rows3[0][1] == "[1, 2, 3, 4, 5, 6]"
+    assert rows3[0][2] == pytest.approx(150000.0)
     conn.close()
 
 

@@ -368,6 +368,18 @@ def upsert_program(conn, parsed):
             """,
             row,
         )
+
+    for a in parsed.get("altili", []):
+        cur.execute(
+            """
+            INSERT INTO altili (date, city, which, start_race, end_race, legs, payout)
+            VALUES (:date, :city, :which, :start_race, :end_race, NULL, NULL)
+            ON CONFLICT(date, city, which) DO UPDATE SET
+                start_race = COALESCE(excluded.start_race, altili.start_race),
+                end_race = COALESCE(excluded.end_race, altili.end_race)
+            """,
+            a,
+        )
     conn.commit()
 
 

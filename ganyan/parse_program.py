@@ -11,6 +11,7 @@ from ganyan.parse_results import (
 )
 
 SON6_RE = re.compile(r"([KÇS])(\d{1,2})")
+ALTILI_START_RE = re.compile(r"(\d+)\.\s*6['’‘][Ll][İIıi]\s+GANYAN\s+Bu\s+ko[şs]udan\s+ba[şs]lar")
 
 
 def parse_son6(s):
@@ -43,12 +44,25 @@ def parse_program_file(path, date=None, city=None):
 
     races = []
     runners = []
+    altili = []
     cur_race = None
 
     for line in lines:
         line_s = line.strip()
         if not line_s:
             continue
+
+        am = ALTILI_START_RE.search(line_s)
+        if am and cur_race is not None:
+            start_race = cur_race["race_no"]
+            altili.append({
+                "date": date,
+                "city": city,
+                "which": int(am.group(1)),
+                "start_race": start_race,
+                "end_race": start_race + 5,
+            })
+
         m = RACE_RE.match(line_s)
         if m:
             race_no = int(m.group(1))
@@ -140,4 +154,5 @@ def parse_program_file(path, date=None, city=None):
         "yg_no": yg_no,
         "races": races,
         "runners": runners,
+        "altili": altili,
     }

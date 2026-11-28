@@ -18,6 +18,8 @@ def _main_db():
                                scratched INT DEFAULT 0);
         CREATE TABLE agf_snapshots (race_id TEXT, prog_no INT, captured_at TEXT, agf_pct REAL, ganyan_live REAL);
         CREATE TABLE bets (race_id TEXT, bet TEXT, combo TEXT, payout REAL);
+        CREATE TABLE altili (date TEXT, city TEXT, which INT, start_race INT, end_race INT,
+                              legs TEXT, payout REAL, PRIMARY KEY(date, city, which));
         """
     )
     return conn
@@ -321,3 +323,62 @@ def test_place_b_runs_once_per_day(tmp_path, monkeypatch, capsys):
     assert vb._track_has_bets(conn, "B_sabah_fund06", "2026-01-01")
     assert not vb._track_has_bets(conn, "B_sabah_fund06", "2026-01-02")   # başka günün/başka izin bahsi engellemez
     assert not vb._track_has_bets(conn, "B_sabah_fund06", "2026-01-03")
+
+
+def _add_altili_schedule(main, date, city, which, start_race, end_race):
+    main.execute(
+        "INSERT INTO altili (date, city, which, start_race, end_race, legs, payout) VALUES (?,?,?,?,?,NULL,NULL)",
+        (date, city, which, start_race, end_race),
+    )
+    main.commit()
+
+
+def test_altili_groups_place_and_settle_end_to_end():
+    main = _main_db()
+    date, city = "2026-02-01", "Adana"
+    pred_rows = []
+    for no in range(1, 7):
+        rid = f"{date}_{city}_{no}"
+        _add_race(main, rid, date, city, no, f"{12 + no}:00", "result",
+                   [(1, f"h{no}a", 1, 2.0, 0), (2, f"h{no}b", 2, 4.0, 0)])
+        _add_snap(main, rid, 1, "t1", 50.0, 2.0)
+        _add_snap(main, rid, 2, "t1", 50.0, 4.0)
+        pred_rows.append((rid, 1, "v10_hlb", 0.9))
+        pred_rows.append((rid, 2, "v10_hlb", 0.1))
+    _add_altili_schedule(main, date, city, 1, 1, 6)   # program kazısı: altılı 1-6 (sonuç henüz yok)
+
+    pred = _pred_db(pred_rows)
+    day = vb.build_day(main, pred, date, "v10_hlb", snap_which="max")
+    day_by_rid = {r.rid: r for r in day}
+    groups = vb._altili_groups(main, date)
+    assert groups == [kp.AltiliGroup(city, 1, tuple(f"{date}_{city}_{n}" for n in range(1, 7)))]
+
+    picks = kp.p_altili_model(groups, day_by_rid)
+    assert len(picks) == 1
+    pick = picks[0]
+    assert pick.persona == "Altılı Ayşe"
+    assert pick.bet_type == "altili"
+    for leg_sel in pick.combo["selected"]:
+        assert 1 in leg_sel   # her ayakta modelin favorisi (horse 1) seçimde olmalı
+
+    state = sqlite3.connect(":memory:")
+    vb.ensure_schema(state)
+    now = "2026-02-01T09:00:00"
+    n = vb._insert_picks(state, "A_kapanis_v10", picks, now, replace=False)
+    assert n == 1
+    stake = state.execute("SELECT stake_tl FROM vb_bets WHERE persona='Altılı Ayşe'").fetchone()[0]
+    assert stake == pytest.approx(kp.BASE * pick.w)
+
+    # Henüz sonuç yok -> settle bekler
+    combo = json.loads(state.execute("SELECT combo FROM vb_bets WHERE persona='Altılı Ayşe'").fetchone()[0])
+    assert vb._settle_one(main, "altili", None, combo, stake=stake) is None
+
+    # Sonuç geldi: her ayakta at 1 kazandı, ikramiye 50.000 TL
+    main.execute(
+        "UPDATE altili SET legs = ?, payout = ? WHERE date=? AND city=? AND which=1",
+        (json.dumps([[1]] * 6), 50_000.0, date, city),
+    )
+    main.commit()
+    win, odds_ret = vb._settle_one(main, "altili", None, combo, stake=stake)
+    assert win is True
+    assert odds_ret * stake == pytest.approx(50_000.0)

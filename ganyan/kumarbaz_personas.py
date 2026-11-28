@@ -9,6 +9,8 @@ from itertools import permutations
 
 import numpy as np
 
+from ganyan.allocator import allocate_coupon_a
+
 BANK0, BASE, MIN_BET = 10_000.0, 50.0, 10.0
 K = 4                       # günde en çok oynanan koşu (Bitik ve Değerci/Stratejik hariç)
 UCLU_FROM, UCLU_BIRIM_TL = "2025-06-01", 2.0
@@ -177,6 +179,54 @@ def p_cifte(day, persona="Çifte Çağla"):
     return out
 
 
+# ----------------------------------------------------------------------------- altılı (Ayşe/Kemal)
+ALT_BUDGET, ALT_UNIT_TL = 200.0, 1.25     # 2026 birimi; docs/KUMARBAZ_BULGULAR.md Uyarı 5
+AltiliGroup = namedtuple("AltiliGroup", "city which race_ids")
+
+
+def _leg_vals(r, which):
+    arr = r.p if which == "model" else r.agfp
+    return [(int(pno), float(p), float(a)) for pno, p, a in zip(r.prog, arr, r.agfp)]
+
+
+def altili_coupon(legs_day, which):
+    """6 ayağın DayRace'leri (sırayla) -> allocate_coupon_a sonucu, ya da None (hazır değilse)."""
+    if len(legs_day) != 6 or any(not r.hasp for r in legs_day):
+        return None
+    legs = [_leg_vals(r, which) for r in legs_day]
+    c = allocate_coupon_a(legs, ALT_BUDGET, unit_tl=ALT_UNIT_TL)
+    if c["cost"] <= 0:
+        return None
+    return c
+
+
+def p_altili(groups, day_by_rid, which, persona):
+    """Günün altılı gruplarından, kendi olasılığıyla (model ya da AGF) en çok tutacağı olana 200 TL'lik kupon."""
+    best = None
+    for g in groups:
+        legs_day = [day_by_rid.get(rid) for rid in g.race_ids]
+        if any(r is None for r in legs_day):
+            continue
+        c = altili_coupon(legs_day, which)
+        if c is None:
+            continue
+        if best is None or c["hit_prob"] > best[0]["hit_prob"]:
+            best = (c, g)
+    if best is None:
+        return []
+    c, g = best
+    combo = {"race_ids": list(g.race_ids), "selected": c["selected"], "k": c["k"]}
+    return [Pick(persona, "altili", "|".join(g.race_ids), combo, c["hit_prob"], float("nan"), c["cost"] / BASE)]
+
+
+def p_altili_model(groups, day_by_rid):
+    return p_altili(groups, day_by_rid, "model", "Altılı Ayşe")
+
+
+def p_altili_agf(groups, day_by_rid):
+    return p_altili(groups, day_by_rid, "agf", "Kuponcu Kemal")
+
+
 PERSONAS = [
     ("Temkinli Tarık", "flat", p_temkinli, "ganyan"),
     ("Cesur Cemal", "flat", p_cesur, "ganyan"),
@@ -191,6 +241,13 @@ PERSONAS = [
     ("Üçlü Ümit", "flat", p_uclu, "uclu"),
     ("Çifte Çağla", "flat", p_cifte, "cifte"),
     ("Rastgele Remzi", "flat", p_rastgele, "ganyan"),
+]
+
+# Altılı Ayşe/Kemal: fn(groups, day_by_rid) -> [Pick], diğer 13'ten farklı imza (günün altılı
+# gruplarını ve tam day listesini ister, "day" tek başına yetmez).
+ALTILI_PERSONAS = [
+    ("Altılı Ayşe", "flat", p_altili_model, "altili"),
+    ("Kuponcu Kemal", "flat", p_altili_agf, "altili"),
 ]
 
 

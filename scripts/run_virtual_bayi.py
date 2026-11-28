@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sanal ganyan bayisi — canlı veriyle 13 kumarbazı paper-trade eder (gerçek para yok).
+"""Sanal ganyan bayisi — canlı veriyle 15 kumarbazı paper-trade eder (gerçek para yok).
 
 İki iz, paralel:
   - Track A ("A_kapanis_v10"): kapanışa yakın AGF + v10_hlb (canlı pipeline'ın zaten ürettiği,
@@ -8,13 +8,17 @@
     verilerek ayrı bir çıktı db'sine (--out) tek seferlik, günün tüm koşuları için erken tahmin
     yazdırılır; bu, normal canlı akıştaki predictions_v5'i ETKİLEMEZ).
 
+Altılı Ayşe / Kuponcu Kemal: hangi 6 koşunun altılı olduğu artık TJK'nın PROGRAM CSV'sindeki
+"X. 6'LI GANYAN Bu koşudan başlar" satırından koşu öncesinde biliniyor (ganyan/parse_program.py,
+`altili` tablosuna legs/payout=NULL olarak önceden yazılır; sonuç geldiğinde aynı satır güncellenir).
+
 Alt komutlar:
-  place-b  : sabah erken fund_06 koşusunu (forward_v5.py) çalıştırıp 13 kumarbazın seçimini kaydet.
-  place-a  : günün (zaten üretilmiş) v10_hlb kapanış tahminlerinden 13 kumarbazın seçimini kaydet.
+  place-b  : sabah erken fund_06 koşusunu (forward_v5.py) çalıştırıp 15 kumarbazın seçimini kaydet.
+  place-a  : günün (zaten üretilmiş) v10_hlb kapanış tahminlerinden 15 kumarbazın seçimini kaydet.
   settle   : sonuçlanmış koşuların bekleyen bahislerini gerçek ödemeyle kapat.
   report   : state/VIRTUAL_BAYI.md yaz (her kumarbaz x iz: kasa, bahis sayısı, isabet).
 
-Kumarbaz kuralları: docs/KUMARBAZ_BULGULAR.md (Altılı Ayşe / Kuponcu Kemal hariç — bkz. oradaki not).
+Kumarbaz kuralları: docs/KUMARBAZ_BULGULAR.md.
 """
 import argparse
 import datetime
@@ -29,8 +33,8 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 from ganyan.kumarbaz_personas import (  # noqa: E402
-    BANK0, BASE, BET, MIN_BET, PERSONAS, UNIT,
-    DayRace, combos_of, paid, parse_combo, stake_tl,
+    ALTILI_PERSONAS, BANK0, BASE, BET, MIN_BET, PERSONAS, UNIT,
+    AltiliGroup, DayRace, combos_of, paid, parse_combo, stake_tl,
 )
 
 VB_SCHEMA_SQL = """
@@ -135,6 +139,7 @@ def build_day(main_conn, pred_conn, date_str, model_version, snap_which):
 
 # ----------------------------------------------------------------------------- place
 def _insert_picks(conn, track, picks, now_iso, replace):
+    """pk.w: BASE'in katı (çoğu kumarbaz için 1.0; Altılı'nın değişken kupon maliyeti için cost/BASE)."""
     verb = "INSERT OR REPLACE" if replace else "INSERT OR IGNORE"
     n = 0
     for pk in picks:
@@ -143,8 +148,8 @@ def _insert_picks(conn, track, picks, now_iso, replace):
             {verb} INTO vb_bets (track, persona, race_id, bet_type, combo, stake_tl, p_model, p_agf, placed_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (track, pk.persona, pk.race_id, pk.bet_type, json.dumps(list(pk.combo)),
-             BASE, pk.p, pk.agfp, now_iso),
+            (track, pk.persona, pk.race_id, pk.bet_type, json.dumps(pk.combo),
+             BASE * pk.w, pk.p, pk.agfp, now_iso),
         )
         n += cur.rowcount
     conn.commit()
@@ -156,6 +161,19 @@ def _track_has_bets(conn, track, date_str):
     return conn.execute(
         "SELECT 1 FROM vb_bets WHERE track = ? AND race_id LIKE ? LIMIT 1", (track, f"{date_str}%")
     ).fetchone() is not None
+
+
+def _altili_groups(main_conn, date_str):
+    """Program kazısından önceden bilinen altılı grupları (sonuç gelmiş olsa da olmasa da)."""
+    rows = main_conn.execute(
+        "SELECT city, which, start_race, end_race FROM altili WHERE date = ?", (date_str,)
+    ).fetchall()
+    out = []
+    for city, which, start, end in rows:
+        if end is None or start is None or end - start != 5:
+            continue
+        out.append(AltiliGroup(city, which, tuple(f"{date_str}_{city}_{n}" for n in range(start, end + 1))))
+    return out
 
 
 def cmd_place_b(args):
@@ -188,10 +206,14 @@ def cmd_place_b(args):
     ensure_schema(state_conn)
     try:
         day = build_day(main_conn, pred_conn, args.date, "fund_06", snap_which="min")
+        day_by_rid = {r.rid: r for r in day}
+        groups = _altili_groups(main_conn, args.date)
         now_iso = datetime.datetime.now().isoformat(timespec="seconds")
         total = 0
         for _name, _kind, fn, _bet_type in PERSONAS:
             total += _insert_picks(state_conn, "B_sabah_fund06", fn(day), now_iso, replace=False)
+        for _name, _kind, fn, _bet_type in ALTILI_PERSONAS:
+            total += _insert_picks(state_conn, "B_sabah_fund06", fn(groups, day_by_rid), now_iso, replace=False)
         print(f"[virtual_bayi] place-b: {len(day)} koşu, {total} yeni bahis (Track B)")
     finally:
         main_conn.close()
@@ -206,10 +228,14 @@ def cmd_place_a(args):
     ensure_schema(state_conn)
     try:
         day = build_day(main_conn, state_conn, args.date, "v10_hlb", snap_which="max")
+        day_by_rid = {r.rid: r for r in day}
+        groups = _altili_groups(main_conn, args.date)
         now_iso = datetime.datetime.now().isoformat(timespec="seconds")
         total = 0
         for _name, _kind, fn, _bet_type in PERSONAS:
             total += _insert_picks(state_conn, "A_kapanis_v10", fn(day), now_iso, replace=False)
+        for _name, _kind, fn, _bet_type in ALTILI_PERSONAS:
+            total += _insert_picks(state_conn, "A_kapanis_v10", fn(groups, day_by_rid), now_iso, replace=False)
         print(f"[virtual_bayi] place-a: {len(day)} koşu, {total} yeni bahis (Track A)")
     finally:
         main_conn.close()
@@ -275,8 +301,28 @@ def _cifte_rows(conn, race_id_b):
     return out
 
 
-def _settle_one(main_conn, bet_type, race_id, combo):
+def _settle_altili(main_conn, combo, stake):
+    """Altılı Ayşe/Kemal: combo = {'race_ids': [...6...], 'selected': [[...],...]}; getiri oranı = ikramiye / maliyet."""
+    race_ids = combo["race_ids"]
+    date, city, start_s = race_ids[0].rsplit("_", 2)
+    row = main_conn.execute(
+        "SELECT legs, payout FROM altili WHERE date = ? AND city = ? AND start_race = ?",
+        (date, city, int(start_s)),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None   # henüz sonuçlanmadı (legs bilinmiyor)
+    legs = json.loads(row[0])
+    payout = float(row[1] or 0.0)
+    selected = combo["selected"]
+    win = len(legs) == 6 and all(set(selected[i]) & set(legs[i]) for i in range(6))
+    return (win, (payout / stake) if (win and stake > 0) else 0.0)
+
+
+def _settle_one(main_conn, bet_type, race_id, combo, stake=None):
     """Tek bir bekleyen bahsi çöz: (win, payout_oran) ya da None (henüz sonuçlanmadı) ya da 'void'."""
+    if bet_type == "altili":
+        return _settle_altili(main_conn, combo, stake)
+
     if bet_type == "cifte":
         rid_a, rid_b = race_id.split("|")
         if _race_result(main_conn, rid_a) != "result" or _race_result(main_conn, rid_b) != "result":
@@ -375,7 +421,7 @@ def cmd_settle(args):
         n_settled = n_void = 0
         for bet_id, bet_type, race_id, combo_json, stake, _persona in pending:
             combo = json.loads(combo_json)
-            res = _settle_one(main_conn, bet_type, race_id, combo)
+            res = _settle_one(main_conn, bet_type, race_id, combo, stake=stake)
             if res is None:
                 continue
             if res == "void":
@@ -430,19 +476,21 @@ def cmd_report(args):
     try:
         lines = ["# Sanal Bayi — Canlı Kumarbaz Defteri\n"]
         lines.append(
-            "> Gerçek para yok. 13 kumarbaz (Altılı Ayşe / Kuponcu Kemal hariç — bkz. "
-            "`docs/KUMARBAZ_BULGULAR.md`), iki paralel izde: **Track A** kapanışa yakın AGF + "
-            "`v10_hlb`, **Track B** sabah erken AGF + `fund_06`. Kasa 10.000 TL, bahis 50 TL. "
-            "Kurallar `ganyan/kumarbaz_personas.py`'de, geriye dönük simülasyonla birebir aynı. "
+            "> Gerçek para yok. 15 kumarbaz (`docs/KUMARBAZ_BULGULAR.md`), iki paralel izde: "
+            "**Track A** kapanışa yakın AGF + `v10_hlb`, **Track B** sabah erken AGF + `fund_06`. "
+            "Kasa 10.000 TL; ganyan/plase/ikili/sıralı/üçlü/çifte bahis 50 TL, Altılı Ayşe/Kuponcu "
+            "Kemal'in kupon maliyeti değişken (en çok 200 TL). Kurallar `ganyan/kumarbaz_personas.py`'de, "
+            "geriye dönük simülasyonla birebir aynı. "
             "**Not:** Bitik Bilal (kaybedince bahis ikiye katlanır) ve Stratejik Selin (çeyrek Kelly) bahis tutarını "
             "sonuçlanma sırasına göre belirler; bekleyen bahislerde tutar henüz belli değildir (gösterilen 50 TL "
             "yer tutucudur). Selin'in Kelly'nin elediği bahisleri \"Boş\" sütununa düşer.\n"
         )
+        all_personas = list(PERSONAS) + list(ALTILI_PERSONAS)
         for track, label in (("A_kapanis_v10", "Track A (kapanış + v10_hlb)"), ("B_sabah_fund06", "Track B (sabah + fund_06)")):
             lines.append(f"\n## {label}\n")
             lines.append("| Kumarbaz | Kasa (TL) | Sonuçlanan | İsabet | Bekleyen | Boş (oynanmamış) |")
             lines.append("|---|---:|---:|---:|---:|---:|")
-            for name, *_ in PERSONAS:
+            for name, *_ in all_personas:
                 led = _ledger(state_conn, track, name)
                 hit = f"{led['n_hit'] / led['n_settled']:.1%}" if led["n_settled"] else "—"
                 lines.append(
