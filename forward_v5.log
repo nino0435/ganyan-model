@@ -582,3 +582,9 @@
 [10:31:34] fund_06: 17 koşu için 173 tahmin yazıldı [Adana 14:30 (mtp=244.6m, S=100%, G=100%), Adana 15:00 (mtp=274.6m, S=90%, G=100%), Adana 15:30 (mtp=304.6m, S=100%, G=78%), Adana 16:00 (mtp=334.6m, S=100%, G=100%), Adana 16:30 (mtp=364.6m, S=90%, G=100%), Adana 17:00 (mtp=394.6m, S=86%, G=86%), İstanbul 17:15 (mtp=409.6m, S=89%, G=100%), Adana 17:30 (mtp=424.6m, S=100%, G=100%), İstanbul 17:45 (mtp=439.6m, S=0%, G=100%), Adana 18:00 (mtp=454.6m, S=83%, G=100%), İstanbul 18:30 (mtp=484.6m, S=86%, G=100%), İstanbul 19:00 (mtp=514.6m, S=100%, G=89%), İstanbul 19:30 (mtp=544.6m, S=0%, G=100%), İstanbul 20:00 (mtp=574.6m, S=100%, G=100%), İstanbul 20:30 (mtp=604.6m, S=92%, G=100%), İstanbul 21:00 (mtp=634.6m, S=0%, G=100%), İstanbul 21:30 (mtp=664.6m, S=83%, G=94%)]
 [virtual_bayi] place-b: 17 koşu, 40 yeni bahis (Track B)
 [10:31:53] Canlı döngü aktif (bitiş epoch=1795862580)
+[13:45:52] Canlı döngü aktif (bitiş epoch=1795876380)
+[14:26:29] v7_tcjp: 1 koşu için 9 tahmin yazıldı [Adana 14:30 (mtp=7.3m, S=100%, G=100%)]
+[14:26:29] v8_an: 1 koşu için 9 tahmin yazıldı [Adana 14:30 (mtp=7.3m, S=100%, G=100%)]
+[14:26:29] v9_kssb: 1 koşu için 9 tahmin yazıldı [Adana 14:30 (mtp=7.3m, S=100%, G=100%)]
+[14:26:29] v10_hlb: 1 koşu için 9 tahmin yazıldı [Adana 14:30 (mtp=7.3m, S=100%, G=100%)]
+[14:26:29] fund_06: 1 koşu için 9 tahmin yazıldı [Adana 14:30 (mtp=7.3m, S=100%, G=100%)]
