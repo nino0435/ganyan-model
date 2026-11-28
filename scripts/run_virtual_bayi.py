@@ -151,8 +151,27 @@ def _insert_picks(conn, track, picks, now_iso, replace):
     return n
 
 
+def _track_has_bets(conn, track, date_str):
+    """Bu izde, bu güne ait (race_id tarihle başlar; çifte 'a|b' da öyle) herhangi bir bahis var mı?"""
+    return conn.execute(
+        "SELECT 1 FROM vb_bets WHERE track = ? AND race_id LIKE ? LIMIT 1", (track, f"{date_str}%")
+    ).fetchone() is not None
+
+
 def cmd_place_b(args):
-    """Sabah erken fund_06 tahminini (ayrı --out db'ye) üretip Track B'nin bahislerini kaydet."""
+    """Sabah erken fund_06 tahminini (ayrı --out db'ye) üretip Track B'nin bahislerini kaydet.
+
+    Günde yalnız bir kez: o güne ait Track B bahsi varsa hiçbir şey yapmaz (ikinci çalışma tahmini kaydırıp
+    "sabah erken tek tahmin" varsayımını bozuyordu).
+    """
+    guard_conn = _open(args.state_db)
+    ensure_schema(guard_conn)
+    try:
+        if _track_has_bets(guard_conn, "B_sabah_fund06", args.date):
+            print(f"[virtual_bayi] place-b: {args.date} için Track B bahisleri zaten yerleştirilmiş, atlandı")
+            return
+    finally:
+        guard_conn.close()
     morning_db = args.morning_db
     cmd = [
         sys.executable, str(REPO / "scripts" / "forward_v5.py"),

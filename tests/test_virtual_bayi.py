@@ -290,3 +290,34 @@ def test_every_persona_labels_its_own_picks():
     for name, _kind, fn, _bt in kp.PERSONAS:
         assert all(pk.persona == name for pk in fn(day)), name
     assert kp.PERSONAS[5][0] == "Stratejik Selin" and len(kp.PERSONAS[5][2](day)) == 1
+
+
+def test_place_b_runs_once_per_day(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    state_path = tmp_path / "state.db"
+    state = sqlite3.connect(str(state_path))
+    vb.ensure_schema(state)
+    state.execute(
+        "INSERT INTO vb_bets (track, persona, race_id, bet_type, combo, stake_tl, placed_at) "
+        "VALUES ('B_sabah_fund06', 'Çifte Çağla', '2026-01-01_Adana_1|2026-01-01_Adana_2', 'cifte', '[1,1]', 50.0, 't0')"
+    )
+    state.execute(
+        "INSERT INTO vb_bets (track, persona, race_id, bet_type, combo, stake_tl, placed_at) "
+        "VALUES ('A_kapanis_v10', 'Mantıklı Mehmet', '2026-01-02_Adana_1', 'ganyan', '[1]', 50.0, 't0')"
+    )
+    state.commit()
+    state.close()
+
+    def boom(*a, **k):
+        raise AssertionError("forward_v5 çalıştırılmamalıydı")
+    monkeypatch.setattr(vb.subprocess, "run", boom)
+
+    args = SimpleNamespace(date="2026-01-01", state_db=str(state_path), main_db=str(tmp_path / "yok.db"),
+                           morning_db=str(tmp_path / "m.db"), model_cache_dir="x")
+    vb.cmd_place_b(args)                                    # aynı gün Track B bahsi var -> atlanır
+    assert "atlandı" in capsys.readouterr().out
+
+    conn = sqlite3.connect(str(state_path))
+    assert vb._track_has_bets(conn, "B_sabah_fund06", "2026-01-01")
+    assert not vb._track_has_bets(conn, "B_sabah_fund06", "2026-01-02")   # başka günün/başka izin bahsi engellemez
+    assert not vb._track_has_bets(conn, "B_sabah_fund06", "2026-01-03")
