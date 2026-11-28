@@ -107,7 +107,7 @@ jobs:
             if [ -f state/forward_v5.log ] && [ "$(wc -l < state/forward_v5.log)" -gt 2500 ]; then
               tail -n 2000 state/forward_v5.log > state/forward_v5.log.tmp && mv state/forward_v5.log.tmp state/forward_v5.log
             fi
-            for f in forward_v5.db FORWARD_V5.md forward_v5.log last_daily_update.txt; do
+            for f in forward_v5.db FORWARD_V5.md forward_v5.log last_daily_update.txt VIRTUAL_BAYI.md; do
               [ -f "state/$f" ] && git -C state add -f "$f"
             done
             if git -C state diff --cached --quiet; then
@@ -152,6 +152,13 @@ jobs:
             python -u scripts/daily_v5_update.py --date "$TODAY" --db data/ganyan.db --galop-source yenibeygir | tee -a state/forward_v5.log || true
             python -u scripts/forward_v5.py --date "$TODAY" --db data/ganyan.db --model-cache-dir data/forward_models --models v7_tcjp,v8_an,v9_kssb,v10_hlb,fund_06 --prewarm-models | tee -a state/forward_v5.log || true
             python scripts/forward_v5_report.py --db data/ganyan.db --forward-db state/forward_v5.db --out state/FORWARD_V5.md || true
+
+            # Sanal bayi: dünün (artık sonuçlanmış) bekleyen bahislerini kapat, bugünün sabah erken
+            # fund_06 + Track B bahislerini yerleştir (canlı modellere/uygulamaya dokunmaz, kağıt üstü).
+            python -u scripts/run_virtual_bayi.py --main-db data/ganyan.db --state-db state/forward_v5.db settle | tee -a state/forward_v5.log || true
+            python -u scripts/run_virtual_bayi.py --main-db data/ganyan.db --state-db state/forward_v5.db place-b --date "$TODAY" --morning-db state/vb_morning.db --model-cache-dir data/forward_models | tee -a state/forward_v5.log || true
+            python scripts/run_virtual_bayi.py --state-db state/forward_v5.db report --out state/VIRTUAL_BAYI.md || true
+
             echo "$TODAY" > state/last_daily_update.txt
             push_state "v6 günlük güncelleme ${TODAY}"
             upload_backup
@@ -243,6 +250,9 @@ jobs:
           if [ "$(date '+%H%M')" -ge "2130" ]; then
             python scripts/update_daily.py --date "$TODAY" --db data/ganyan.db || true
             python scripts/forward_v5_report.py --db data/ganyan.db --forward-db state/forward_v5.db --out state/FORWARD_V5.md || true
+            # Sanal bayi: günün kapanışa yakın v10_hlb + Track A bahislerini yerleştir ve raporu tazele.
+            python -u scripts/run_virtual_bayi.py --main-db data/ganyan.db --state-db state/forward_v5.db place-a --date "$TODAY" | tee -a state/forward_v5.log || true
+            python scripts/run_virtual_bayi.py --state-db state/forward_v5.db report --out state/VIRTUAL_BAYI.md || true
             NEED_BACKUP=1
           fi
 
