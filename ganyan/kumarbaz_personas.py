@@ -183,7 +183,7 @@ PERSONAS = [
     ("Bitik Bilal", "bitik", p_bitik, "ganyan"),
     ("Mantıklı Mehmet", "flat", p_mantikli, "ganyan"),
     ("Değerci Deniz", "flat", p_degerci, "ganyan"),
-    ("Stratejik Selin", "kelly", p_degerci, "ganyan"),
+    ("Stratejik Selin", "kelly", lambda day: p_degerci(day, persona="Stratejik Selin"), "ganyan"),
     ("Plase Pınar", "flat", p_plase, "plase"),
     ("Dengeli Derya", "flat", p_dengeli, "plase"),
     ("İkili İlhan", "flat", p_ikili, "ikili"),

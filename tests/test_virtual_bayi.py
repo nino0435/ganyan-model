@@ -275,3 +275,18 @@ def test_settle_leaves_flat_personas_untouched_by_replay():
     main, state = _seq_setup("Değerci Deniz", [(1, "12:00", "result", True)])
     vb._replay_sequential(main, state)
     assert state.execute("SELECT settled, stake_tl FROM vb_bets").fetchone() == (0, 50.0)
+
+
+def test_every_persona_labels_its_own_picks():
+    """Selin, Değerci'nin seçicisini kullanır ama bahisleri kendi adıyla yazılmalı (aksi halde benzersiz indeks onları eler)."""
+    main = _main_db()
+    _add_race(main, "2026-01-01_Adana_1", "2026-01-01", "Adana", 1, "12:00", "scheduled",
+               [(1, "h1", None, None, 0), (2, "h2", None, None, 0), (3, "h3", None, None, 0)])
+    for pno, agf, gl in ((1, 70.0, 1.4), (2, 20.0, 5.0), (3, 10.0, 10.0)):
+        _add_snap(main, "2026-01-01_Adana_1", pno, "t1", agf, gl)
+    pred = _pred_db([("2026-01-01_Adana_1", 1, "v10_hlb", 0.3), ("2026-01-01_Adana_1", 2, "v10_hlb", 0.5),
+                     ("2026-01-01_Adana_1", 3, "v10_hlb", 0.2)])
+    day = vb.build_day(main, pred, "2026-01-01", "v10_hlb", snap_which="max")
+    for name, _kind, fn, _bt in kp.PERSONAS:
+        assert all(pk.persona == name for pk in fn(day)), name
+    assert kp.PERSONAS[5][0] == "Stratejik Selin" and len(kp.PERSONAS[5][2](day)) == 1
