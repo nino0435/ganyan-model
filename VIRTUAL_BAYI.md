@@ -10,16 +10,16 @@
 | Temkinli Tarık | 10,000 | 0 | — | 0 | 0 |
 | Cesur Cemal | 10,000 | 0 | — | 0 | 0 |
 | Bitik Bilal | 10,000 | 0 | — | 0 | 0 |
-| Mantıklı Mehmet | 10,000 | 0 | — | 0 | 0 |
-| Değerci Deniz | 10,000 | 0 | — | 0 | 0 |
+| Mantıklı Mehmet | 10,000 | 0 | — | 4 | 0 |
+| Değerci Deniz | 10,000 | 0 | — | 1 | 0 |
 | Stratejik Selin | 10,000 | 0 | — | 0 | 0 |
-| Plase Pınar | 10,000 | 0 | — | 0 | 0 |
-| Dengeli Derya | 10,000 | 0 | — | 0 | 0 |
-| İkili İlhan | 10,000 | 0 | — | 0 | 0 |
-| Sıralı Sibel | 10,000 | 0 | — | 0 | 0 |
-| Üçlü Ümit | 10,000 | 0 | — | 0 | 0 |
-| Çifte Çağla | 10,000 | 0 | — | 0 | 0 |
-| Rastgele Remzi | 10,000 | 0 | — | 0 | 0 |
+| Plase Pınar | 10,000 | 0 | — | 4 | 0 |
+| Dengeli Derya | 10,000 | 0 | — | 1 | 0 |
+| İkili İlhan | 10,000 | 0 | — | 4 | 0 |
+| Sıralı Sibel | 10,000 | 0 | — | 4 | 0 |
+| Üçlü Ümit | 10,000 | 0 | — | 4 | 0 |
+| Çifte Çağla | 10,000 | 0 | — | 4 | 0 |
+| Rastgele Remzi | 10,000 | 0 | — | 4 | 0 |
 
 ## Track B (sabah + fund_06)
 
