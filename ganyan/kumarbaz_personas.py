@@ -195,16 +195,23 @@ PERSONAS = [
 
 
 # ----------------------------------------------------------------------------- yerleştirme (bahis büyüklüğü)
-def stake_tl(kind, bank, p, agfp):
-    """Kasa ve bahis türüne göre bahis tutarı (TL); kelly için p/agfp'den kesirli Kelly, flat/bitik için BASE."""
-    if kind != "kelly":
+def stake_tl(kind, bank, p, agfp, streak=0, open_=None, spent=0.0):
+    """Bahis tutarı (TL), scripts/run_kumarbaz_sim.py::stake ile birebir.
+
+    flat: BASE · bitik: BASE * 2**kayıp serisi · kelly: p/agfp'den çeyrek Kelly
+    (kasanın en çok %2'si, günlük toplam en çok gün başı kasanın %8'i; open_ gün başı kasa, spent bugün harcanan).
+    """
+    if kind == "flat":
         return BASE
+    if kind == "bitik":
+        return BASE * 2.0 ** min(streak, 40)
     bhat = 0.70 / max(agfp, 0.003)
     edge = p * bhat - 1.0
     if edge <= 0 or bhat <= 1.0:
         return 0.0
     f = min(0.25 * edge / (bhat - 1.0), 0.02)
-    return max(0.0, min(f * bank, 0.08 * bank))
+    open_ = bank if open_ is None else open_
+    return max(0.0, min(f * bank, 0.08 * open_ - spent))
 
 
 # ----------------------------------------------------------------------------- ödeme (settle)

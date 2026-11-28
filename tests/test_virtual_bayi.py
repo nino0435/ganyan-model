@@ -203,3 +203,75 @@ def test_report_computes_bankroll_from_settled_bets(tmp_path):
     assert led["n_settled"] == 2
     assert led["n_hit"] == 1
     assert led["n_pending"] == 1
+
+
+def _seq_setup(persona, races, p=0.4, agf=0.2):
+    """races: [(race_no, post_time, status, win)] — tek koşucu (prog 1) ile, ganyan 4,0."""
+    main = _main_db()
+    state = sqlite3.connect(":memory:")
+    vb.ensure_schema(state)
+    for no, post, status, win in races:
+        rid = f"2026-01-01_Adana_{no}"
+        _add_race(main, rid, "2026-01-01", "Adana", no, post, status,
+                   [(1, f"h{no}", 1 if win else 2, 4.0, 0)])
+        state.execute(
+            "INSERT INTO vb_bets (track, persona, race_id, bet_type, combo, stake_tl, p_model, p_agf, placed_at) "
+            "VALUES ('A_kapanis_v10', ?, ?, 'ganyan', '[1]', 50.0, ?, ?, 't0')",
+            (persona, rid, p, agf),
+        )
+    state.commit()
+    return main, state
+
+
+def test_bitik_doubles_after_loss_and_resets_after_win():
+    main, state = _seq_setup("Bitik Bilal", [(1, "12:00", "result", False), (2, "12:30", "result", False),
+                                             (3, "13:00", "result", True), (4, "13:30", "result", False)])
+    vb._replay_sequential(main, state)
+    stakes = [r[0] for r in state.execute("SELECT stake_tl FROM vb_bets ORDER BY race_id")]
+    assert stakes == [50.0, 100.0, 200.0, 50.0]            # kayıp, kayıp, kazanç(200 TL, 4,0 oran), seri sıfırlanır
+    led = vb._ledger(state, "A_kapanis_v10", "Bitik Bilal")
+    assert led["bank"] == pytest.approx(kp.BANK0 - 50 - 100 + (200 * 4.0 - 200) - 50)
+
+
+def test_bitik_stops_at_first_unsettled_race_so_stake_never_uses_unknown_result():
+    main, state = _seq_setup("Bitik Bilal", [(1, "12:00", "result", False), (2, "12:30", "scheduled", False),
+                                             (3, "13:00", "result", True)])
+    vb._replay_sequential(main, state)
+    rows = state.execute("SELECT settled FROM vb_bets ORDER BY race_id").fetchall()
+    assert rows == [(1,), (0,), (0,)]                       # 3. koşu 2.'nin sonucu bilinmeden çözülmez
+
+
+def test_cancelled_race_is_void_and_does_not_block_or_change_streak():
+    main, state = _seq_setup("Bitik Bilal", [(1, "12:00", "result", False), (2, "12:30", "cancelled", False),
+                                             (3, "13:00", "result", False)])
+    vb._replay_sequential(main, state)
+    stakes_win = state.execute("SELECT stake_tl, win FROM vb_bets ORDER BY race_id").fetchall()
+    assert stakes_win[1][1] is None
+    assert stakes_win[2][0] == 100.0                         # iptal seriyi bozmaz: 1 kayıp -> 100 TL
+
+
+def test_selin_kelly_stake_cap_and_skip_when_no_edge():
+    # p=0,4, agf=0,2: bhat=3,5; edge=0,4*3,5-1=0,4; f=min(0,25*0,4/2,5=0,04; 0,02)=0,02 -> 200 TL (kasa 10.000)
+    main, state = _seq_setup("Stratejik Selin", [(1, "12:00", "result", False)])
+    vb._replay_sequential(main, state)
+    assert state.execute("SELECT stake_tl, win FROM vb_bets").fetchone() == (pytest.approx(200.0), 0)
+    # p AGF payının altında -> avantaj yok -> oynanmaz (boş)
+    main, state = _seq_setup("Stratejik Selin", [(1, "12:00", "result", True)], p=0.1, agf=0.2)
+    vb._replay_sequential(main, state)
+    assert state.execute("SELECT settled, win, stake_tl FROM vb_bets").fetchone() == (1, None, 0.0)
+
+
+def test_selin_daily_cap_is_8_percent_of_day_open_bank():
+    # Her bahis kasanın %2'si (kasa kayıpla düşer: 200, 196, ...); toplam günün açılış kasasının %8'ini (800 TL) aşamaz
+    main, state = _seq_setup("Stratejik Selin", [(i, f"1{i}:00", "result", False) for i in range(1, 6)])
+    vb._replay_sequential(main, state)
+    stakes = [r[0] for r in state.execute("SELECT stake_tl FROM vb_bets ORDER BY race_id")]
+    assert stakes[:4] == pytest.approx([200.0, 196.0, 192.08, 188.2384])
+    assert stakes[4] == pytest.approx(800.0 - sum(stakes[:4]))   # 5. bahis sınırın kalanına kırpılır
+    assert sum(stakes) == pytest.approx(800.0)
+
+
+def test_settle_leaves_flat_personas_untouched_by_replay():
+    main, state = _seq_setup("Değerci Deniz", [(1, "12:00", "result", True)])
+    vb._replay_sequential(main, state)
+    assert state.execute("SELECT settled, stake_tl FROM vb_bets").fetchone() == (0, 50.0)

@@ -29,8 +29,8 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 from ganyan.kumarbaz_personas import (  # noqa: E402
-    BANK0, BASE, BET, PERSONAS, UNIT,
-    DayRace, combos_of, paid, parse_combo,
+    BANK0, BASE, BET, MIN_BET, PERSONAS, UNIT,
+    DayRace, combos_of, paid, parse_combo, stake_tl,
 )
 
 VB_SCHEMA_SQL = """
@@ -287,16 +287,74 @@ def _settle_one(main_conn, bet_type, race_id, combo):
     return (got > 0, got / len(cs))
 
 
+SEQUENTIAL = {name: kind for name, kind, *_ in PERSONAS if kind != "flat"}   # Bitik (bitik), Selin (kelly)
+
+
+def _replay_sequential(main_conn, state_conn):
+    """Bitik (kaybedince katla) ve Selin (çeyrek Kelly): bahis tutarı kasa/seriye bağlı, yani sırayla belli olur.
+
+    Bahisler koşu saatine göre dizilip her çağrıda baştan oynatılır (sim ile aynı kural); ilk sonuçlanmamış
+    bahiste durur, böylece tutar hiçbir zaman henüz bilinmeyen bir sonuca dayanmaz.
+    """
+    n_settled = n_void = 0
+    for track, persona in state_conn.execute("SELECT DISTINCT track, persona FROM vb_bets").fetchall():
+        kind = SEQUENTIAL.get(persona)
+        if kind is None:
+            continue
+        rows = state_conn.execute(
+            "SELECT id, bet_type, race_id, combo, p_model, p_agf, settled FROM vb_bets WHERE track = ? AND persona = ?",
+            (track, persona),
+        ).fetchall()
+        post = {rid: (main_conn.execute("SELECT post_time FROM races WHERE race_id = ?", (rid,)).fetchone() or ("",))[0] or ""
+                for rid in {r[2] for r in rows}}
+        rows.sort(key=lambda r: (r[2][:10], post[r[2]], r[0]))
+        bank, streak, day, open_, spent = BANK0, 0, None, BANK0, 0.0
+        for bet_id, bet_type, race_id, combo_json, p, agf, was_settled in rows:
+            if _race_result(main_conn, race_id) == "cancelled":
+                res = "void"
+            else:
+                res = _settle_one(main_conn, bet_type, race_id, json.loads(combo_json))
+            if res is None:
+                break
+            if race_id[:10] != day:
+                day, open_, spent = race_id[:10], bank, 0.0
+            stake = 0.0
+            if res != "void":
+                stake = min(stake_tl(kind, bank, float(p or 0.0), float(agf or 0.0), streak, open_, spent), bank)
+            if res == "void" or stake < MIN_BET:
+                state_conn.execute(
+                    "UPDATE vb_bets SET settled = 1, win = NULL, payout_tl = NULL, stake_tl = ? WHERE id = ?",
+                    (BASE if res == "void" else 0.0, bet_id),
+                )
+                n_void += 0 if was_settled else 1
+                continue
+            win, odds_ret = res
+            payout = stake * odds_ret if win else 0.0
+            state_conn.execute(
+                "UPDATE vb_bets SET settled = 1, win = ?, payout_tl = ?, stake_tl = ? WHERE id = ?",
+                (int(win), payout, stake, bet_id),
+            )
+            bank += payout - stake
+            spent += stake
+            streak = 0 if win else streak + 1
+            n_settled += 0 if was_settled else 1
+    state_conn.commit()
+    return n_settled, n_void
+
+
 def cmd_settle(args):
     main_conn = _open(args.main_db)
     state_conn = _open(args.state_db)
     ensure_schema(state_conn)
     try:
-        pending = state_conn.execute(
-            "SELECT id, bet_type, race_id, combo, stake_tl FROM vb_bets WHERE settled = 0"
-        ).fetchall()
+        pending = [
+            r for r in state_conn.execute(
+                "SELECT id, bet_type, race_id, combo, stake_tl, persona FROM vb_bets WHERE settled = 0"
+            ).fetchall()
+            if r[5] not in SEQUENTIAL
+        ]
         n_settled = n_void = 0
-        for bet_id, bet_type, race_id, combo_json, stake in pending:
+        for bet_id, bet_type, race_id, combo_json, stake, _persona in pending:
             combo = json.loads(combo_json)
             res = _settle_one(main_conn, bet_type, race_id, combo)
             if res is None:
@@ -313,6 +371,9 @@ def cmd_settle(args):
             )
             n_settled += 1
         state_conn.commit()
+        s2, v2 = _replay_sequential(main_conn, state_conn)
+        n_settled += s2
+        n_void += v2
         print(f"[virtual_bayi] settle: {n_settled} bahis sonuçlandı, {n_void} boş (oynanmamış) sayıldı")
     finally:
         main_conn.close()
@@ -354,9 +415,9 @@ def cmd_report(args):
             "`docs/KUMARBAZ_BULGULAR.md`), iki paralel izde: **Track A** kapanışa yakın AGF + "
             "`v10_hlb`, **Track B** sabah erken AGF + `fund_06`. Kasa 10.000 TL, bahis 50 TL. "
             "Kurallar `ganyan/kumarbaz_personas.py`'de, geriye dönük simülasyonla birebir aynı. "
-            "**Not:** canlı sürümde her bahis düz 50 TL; Bitik Bilal'in kaybedince katlama ve "
-            "Stratejik Selin'in çeyrek Kelly kuralı henüz uygulanmadı (ikisi de sıralı kasa durumu "
-            "gerektiriyor), bu yüzden ikisinin de sonucu burada Mantıklı/Değerci'den farklı olmamalı.\n"
+            "**Not:** Bitik Bilal (kaybedince bahis ikiye katlanır) ve Stratejik Selin (çeyrek Kelly) bahis tutarını "
+            "sonuçlanma sırasına göre belirler; bekleyen bahislerde tutar henüz belli değildir (gösterilen 50 TL "
+            "yer tutucudur). Selin'in Kelly'nin elediği bahisleri \"Boş\" sütununa düşer.\n"
         )
         for track, label in (("A_kapanis_v10", "Track A (kapanış + v10_hlb)"), ("B_sabah_fund06", "Track B (sabah + fund_06)")):
             lines.append(f"\n## {label}\n")
